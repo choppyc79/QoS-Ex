@@ -105,17 +105,22 @@ run_bounded() {
 	rm -f "$_rf"
 }
 
-# GitHub, for update_check / update_run: the Contents API raw type, as
-# QoS-Ex-install.sh uses it (serves a private repo with a token; not CDN-cached
-# after a push). Same order as QoS-Ex-install.sh: private (the token it saved,
-# when there is one), then public.
+# GitHub, for update_check / update_run, as QoS-Ex-install.sh fetches it: with
+# the saved token the Contents API, raw type (serves a private repo; not
+# CDN-cached after a push), without one raw.githubusercontent.com (the API
+# allows only 60 anonymous calls an hour per internet address; raw may lag a
+# push by up to 5 min). Same order as QoS-Ex-install.sh: private (the token
+# it saved, when there is one), then public.
 # uclient-fetch is OpenWrt's default and has --header since 24.10; curl
 # when wget is missing or fails. $1 path, $2 auth header; body on stdout.
 # GH_ERR = the downloader's last line on failure ("HTTP error 404", ...).
 GH_TOKEN_FILE="/etc/qos-ex/gh-token"
 GH_ERR=""
 gh_get() {
-	_u="https://api.github.com/repos/choppyc79/QoS-Ex/contents/$1?ref=$(upd_ref)"
+	case "$2" in
+	Authorization*) _u="https://api.github.com/repos/choppyc79/QoS-Ex/contents/$1?ref=$(upd_ref)" ;;
+	*) _u="https://raw.githubusercontent.com/choppyc79/QoS-Ex/$(upd_ref)/$1" ;;
+	esac
 	_a="Accept: application/vnd.github.raw"; _ge="/var/run/qos-ex-gh.err.$$"; _gr=1
 	if command -v wget >/dev/null 2>&1; then
 		wget -T 15 -O - --header="$2" --header="$_a" "$_u" 2>"$_ge"; _gr=$?
