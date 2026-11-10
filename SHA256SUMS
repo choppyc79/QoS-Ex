@@ -1,7 +1,7 @@
-#v luci=1.3.9.7 pf=2.0.9.4 shaper=3.2.1.7
+#v luci=1.3.9.8 pf=2.0.9.4 shaper=3.2.1.7
 014988ed33883b9cd7d52935c5b22a138bfcd34f6bd6e0ae9617df878caae214  QoS-Ex.sh
 0a3c049017e36c93df5db0b130a9ed5b47089ce398fa379ebce14dd9d96709fd  lib/install.sh
 563ef0224f5725026cb4ab50b55202c2916eb8af1536d2d67e90d540219ad033  QoS-Ex-PF.sh
-1e34022b44a1a6b1aea6760ce1f4f3ab4aebe41540a2e951151e1f0e13a58173  QoS-Ex-luci-app.sh
-c37ec88c04aa5f1ca7b0ba7afa1a903ea046fb03390357b4b9bf874c103890af  QoS-Ex-install.sh
-b15c0c2b7539ff086b8e1245a4057457cce8275ca5840d113492fb4dfdbc947a  qos-ex-luci.tar.gz
+b9f52b9c3b50892aabd61a1b371092c97b5d9ecedf955272b48ca7c066883064  QoS-Ex-luci-app.sh
+a4f19a2e14f477bdbba9ce2b8546d028bedf6299515802893fbae0423966820b  QoS-Ex-install.sh
+b8db58cd75dfd878de03faec37aff947a01df394953bcd9347b9f8167089aaed  qos-ex-luci.tar.gz
