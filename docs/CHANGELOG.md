@@ -5,7 +5,12 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.3.9.7 · Ping Filter 2.0.9.4 · shaper 3.2.1.7**
+Current: **LuCI app 1.3.9.8 · Ping Filter 2.0.9.4 · shaper 3.2.1.7**
+
+## LuCI app 1.3.9.8 and the installer
+
+- Fixed: an install or update without a GitHub token could stop with `HTTP error 403`. GitHub allows 60 anonymous API calls an hour per internet address, shared by every device behind it, and one install uses about ten. Without a token, the installer, the update check and **Update now** now download from raw.githubusercontent.com, which has no such limit; a token still goes through the API.
+- Changed: the one-line install is shorter (README, SETUP). For up to 5 minutes after an update is published, raw.githubusercontent.com can still serve some old files; an install then stops with "an update is probably being published" and changes nothing.
 
 ## LuCI app 1.3.9.7
 
