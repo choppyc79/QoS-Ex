@@ -93,29 +93,37 @@ _run() {
 	return "$_rc"
 }
 
-# $1 url, $2 out. wget first (uclient-fetch, BusyBox or GNU), then curl, as
-# the app's update check does: each is tried in turn, so a downloader without
-# TLS still falls through to the other. The token goes to them as a header
-# argument (uclient-fetch cannot read one from a file), so it shows in the
-# process list while a download runs. The Contents API (raw media type)
-# serves private repos and, unlike raw.githubusercontent.com, is not
-# CDN-cached for ~5 min after a push.
+# $1 repo path, $2 out. With a token, the Contents API (raw media type): it
+# serves private repos and is not CDN-cached after a push. Without one,
+# raw.githubusercontent.com: the API allows only 60 anonymous calls an hour
+# per internet address, shared by everything behind it; raw has no such
+# limit, but may serve a file up to 5 min old after a push, and the manifest
+# check below refuses such a mixed set.
+# wget first (uclient-fetch, BusyBox or GNU), then curl, as the app's update
+# check does: each is tried in turn, so a downloader without TLS still falls
+# through to the other. The token goes to them as a header argument
+# (uclient-fetch cannot read one from a file), so it shows in the process
+# list while a download runs.
 # uclient-fetch has --header since 2024-04 (OpenWrt 24.10+).
 # $3 = attempts (default 2). On failure GET_ERR is the downloader's last
 # line ("HTTP error 404", "Connection error: ...") -- what tells a bad token
 # from a private repo from no network. wget is not run quiet for that.
 _get() {
+	case "$AUTH" in
+	Authorization*) _u="https://api.github.com/repos/$REPO/contents/$1?ref=$REF" ;;
+	*) _u="https://raw.githubusercontent.com/$REPO/$REF/$1" ;;
+	esac
 	_acc="Accept: application/vnd.github.raw"; GET_ERR=""; _try=0
 	while [ "$_try" -lt "${3:-2}" ]; do
 		[ "$_try" -gt 0 ] && sleep 2
 		_try=$((_try + 1))
 		if [ -n "$HAVE_WGET" ]; then
 			wget -T 20 -O "$2" --header="$AUTH" \
-				--header="$_acc" "$1" 2>"$TMP/.err" && return 0
+				--header="$_acc" "$_u" 2>"$TMP/.err" && return 0
 		fi
 		if [ -n "$HAVE_CURL" ]; then
 			curl -fsSL --connect-timeout 10 --max-time 120 -o "$2" \
-				-H "$AUTH" -H "$_acc" "$1" 2>"$TMP/.err" && return 0
+				-H "$AUTH" -H "$_acc" "$_u" 2>"$TMP/.err" && return 0
 		fi
 	done
 	GET_ERR=$(tail -n 1 "$TMP/.err" 2>/dev/null | tr -d '\r')
@@ -125,9 +133,9 @@ _get() {
 # Is the repo readable at $REF with the current $AUTH?
 _probe() {
 	OLDNAME=0
-	_get "$_pu/QoS-Ex-install.sh?ref=$REF" "$TMP/.probe" 1 && return 0
+	_get QoS-Ex-install.sh "$TMP/.probe" 1 && return 0
 	_pe="$GET_ERR"
-	_get "$_pu/install.sh?ref=$REF" "$TMP/.probe" 1 && { OLDNAME=1; return 0; }
+	_get install.sh "$TMP/.probe" 1 && { OLDNAME=1; return 0; }
 	GET_ERR="$_pe"
 	return 1
 }
@@ -188,15 +196,14 @@ main() {
 
 	# Private, then public, then install. Probe with the smallest file:
 	#   1. a token (-t, $GH_TOKEN, the saved file), when there is one;
-	#   2. no credentials (a dummy header keeps one code path) -- no token,
-	#      or it was refused: an expired token is refused even on a public
-	#      repo;
+	#   2. no credentials, from raw.githubusercontent.com (a dummy header
+	#      keeps one code path) -- no token, or it was refused: an expired
+	#      token is refused even on a public repo;
 	#   3. both failed: ask on the terminal (works when piped - stdin is
 	#      the script, /dev/tty is still the SSH session).
 	# Each failure keeps its reason for the log.
 	# A ref from before LuCI app 1.2.7.4 has this script as install.sh only
 	# (-b to roll back): _probe finds which, and OLDNAME=1 fetches that set.
-	_pu="https://api.github.com/repos/$REPO/contents"
 	_saved=""; _src=""; _terr="none saved"; _aerr=""
 	[ -r "$TOKEN_FILE" ] && read -r _saved < "$TOKEN_FILE"
 	[ -n "$TOKEN" ] || TOKEN="$_saved"
@@ -227,12 +234,12 @@ main() {
 			if _probe; then _src="private (token)"; else _terr="${GET_ERR:-no reply}"; fi
 		fi
 	fi
-	[ -n "$_src" ] || die "no access to $REPO at '$REF' - token: $_terr; public: $_aerr. Private repo needs a valid token (-t TOKEN); else wrong ref or no network/HTTPS (need ca-bundle + libustream-mbedtls)"
+	[ -n "$_src" ] || die "no access to $REPO at '$REF' - token: $_terr; public: $_aerr. Wrong ref, no network/HTTPS (need ca-bundle + libustream-mbedtls), or GitHub is limiting this address - try again later"
 	[ -n "$QOS_EX_REEXEC" ] || _ok "GitHub $REPO, $_src"
 	[ "$OLDNAME" = 1 ] && FILES="QoS-Ex.sh QoS-Ex-PF.sh QoS-Ex-luci-app.sh install.sh"
 
 	for f in $FILES; do
-		_get "https://api.github.com/repos/$REPO/contents/$f?ref=$REF" "$TMP/$f" ||
+		_get "$f" "$TMP/$f" ||
 			die "download failed: $f (${GET_ERR:-no reply}) - network dropped, or GitHub rate limit"
 		read -r _l < "$TMP/$f"
 		case "$_l" in '#!'*) ;; *) die "$f: not a script (bad token or ref?)" ;; esac
@@ -243,7 +250,7 @@ main() {
 	LIBS=""
 	if grep -q '^_lib_install()' "$TMP/QoS-Ex.sh"; then
 		LIBS="lib/install.sh"; mkdir -p "$TMP/lib"
-		_get "https://api.github.com/repos/$REPO/contents/$LIBS?ref=$REF" "$TMP/$LIBS" ||
+		_get "$LIBS" "$TMP/$LIBS" ||
 			die "download failed: $LIBS (${GET_ERR:-no reply}) - network dropped, or GitHub rate limit"
 		read -r _l < "$TMP/$LIBS"
 		case "$_l" in '#!'*) ;; *) die "$LIBS: not a script (bad token or ref?)" ;; esac
@@ -255,7 +262,7 @@ main() {
 	_ts="$(sed -n 's/^LUCI_TAR_SHA="\([0-9a-f]*\)"$/\1/p' "$TMP/QoS-Ex-luci-app.sh" | head -n 1)"
 	if [ -n "$_ts" ]; then
 		DATA="$LUCI_TAR"
-		_get "https://api.github.com/repos/$REPO/contents/$DATA?ref=$REF" "$TMP/$DATA" ||
+		_get "$DATA" "$TMP/$DATA" ||
 			die "download failed: $DATA (${GET_ERR:-no reply}) - network dropped, or GitHub rate limit"
 		[ "$(sha256sum "$TMP/$DATA" 2>/dev/null | cut -d' ' -f1)" = "$_ts" ] ||
 			die "$DATA is not the one QoS-Ex-luci-app.sh names - an update is probably being published. Nothing installed; try again in a few minutes"
@@ -266,7 +273,7 @@ main() {
 	# is being pushed does not match it and is refused, so /root never gets
 	# a mixed set. A ref from before the manifest existed has none: said,
 	# and the files are used as they are.
-	if _get "https://api.github.com/repos/$REPO/contents/SHA256SUMS?ref=$REF" "$TMP/SHA256SUMS"; then
+	if _get SHA256SUMS "$TMP/SHA256SUMS"; then
 		for f in $FILES $LIBS $DATA; do
 			_want="$(awk -v f="$f" '$2 == f { print $1; exit }' "$TMP/SHA256SUMS")"
 			_have="$(sha256sum "$TMP/$f" 2>/dev/null | cut -d' ' -f1)"

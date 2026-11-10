@@ -43,7 +43,7 @@ Turn off anything that conflicts:
 2. Paste this one line and press Enter:
 
    ```sh
-   wget -O- --header="Accept: application/vnd.github.raw" https://api.github.com/repos/choppyc79/QoS-Ex/contents/QoS-Ex-install.sh | sh
+   wget -O- https://raw.githubusercontent.com/choppyc79/QoS-Ex/main/QoS-Ex-install.sh | sh
    ```
 
 3. Wait for the result line, `QoS-Ex installed:` with the versions of the

@@ -33,7 +33,7 @@ coreutils-timeout tcpdump-mini`.
 Paste into an SSH session on the router:
 
 ```sh
-wget -O- --header="Accept: application/vnd.github.raw" https://api.github.com/repos/choppyc79/QoS-Ex/contents/QoS-Ex-install.sh | sh
+wget -O- https://raw.githubusercontent.com/choppyc79/QoS-Ex/main/QoS-Ex-install.sh | sh
 ```
 
 Then log in to LuCI again, open **Network → QoS-Ex** and press **Auto
