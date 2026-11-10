@@ -1,0 +1,144 @@
+{
+	"admin/network/qos-ex": {
+		"title": "QoS-Ex",
+		"order": 90,
+		"action": { "type": "firstchild" },
+		"depends": { "acl": [ "luci-app-qos-ex" ] }
+	},
+	"admin/network/qos-ex/autosetup": {
+		"title": "Auto Setup",
+		"order": 5,
+		"action": { "type": "view", "path": "qos-ex/autosetup" },
+		"depends": { "uci": { "qos-ex": { "autosetup": { "done": "0" } } } }
+	},
+	"admin/network/qos-ex/overview": {
+		"title": "Overview",
+		"order": 10,
+		"action": { "type": "view", "path": "qos-ex/overview" }
+	},
+	"admin/network/qos-ex/pingfilter": {
+		"title": "Ping Filter",
+		"order": 20,
+		"action": { "type": "firstchild" }
+	},
+	"admin/network/qos-ex/pingfilter/dashboard": {
+		"title": "Dashboard",
+		"order": 0,
+		"action": { "type": "view", "path": "qos-ex/pingfilter/dashboard" }
+	},
+	"admin/network/qos-ex/pingfilter/settings": {
+		"title": "Settings",
+		"order": 4,
+		"action": { "type": "view", "path": "qos-ex/pingfilter/settings" }
+	},
+	"admin/network/qos-ex/pingfilter/map": {
+		"title": "Map",
+		"order": 2,
+		"action": { "type": "view", "path": "qos-ex/pingfilter/map" }
+	},
+	"admin/network/qos-ex/pingfilter/servers": {
+		"title": "Servers",
+		"order": 3,
+		"action": { "type": "view", "path": "qos-ex/pingfilter/servers" }
+	},
+	"admin/network/qos-ex/pingfilter/serverlist": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/pingfilter/servers" }
+	},
+	"admin/network/qos-ex/pingfilter/lists": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/pingfilter/servers" }
+	},
+	"admin/network/qos-ex/pingfilter/advanced": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/pingfilter/settings" }
+	},
+	"admin/network/qos-ex/live": {
+		"title": "Live",
+		"order": 30,
+		"action": { "type": "firstchild" }
+	},
+	"admin/network/qos-ex/live/stats": {
+		"title": "Stats",
+		"order": 1,
+		"action": { "type": "view", "path": "qos-ex/stats" }
+	},
+	"admin/network/qos-ex/live/flows": {
+		"title": "Flows",
+		"order": 2,
+		"action": { "type": "view", "path": "qos-ex/flows" }
+	},
+	"admin/network/qos-ex/setup": {
+		"title": "Setup",
+		"order": 40,
+		"action": { "type": "view", "path": "qos-ex/setup" }
+	},
+	"admin/network/qos-ex/setup/shaper": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/setup" }
+	},
+	"admin/network/qos-ex/setup/rules": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/setup" }
+	},
+	"admin/network/qos-ex/system": {
+		"title": "System",
+		"order": 50,
+		"action": { "type": "firstchild" }
+	},
+	"admin/network/qos-ex/system/status": {
+		"title": "Status",
+		"order": 1,
+		"action": { "type": "view", "path": "qos-ex/status" }
+	},
+	"admin/network/qos-ex/system/logs": {
+		"title": "Logs",
+		"order": 2,
+		"action": { "type": "view", "path": "qos-ex/logs" }
+	},
+	"admin/network/qos-ex/system/maintenance": {
+		"title": "Maintenance",
+		"order": 3,
+		"action": { "type": "view", "path": "qos-ex/maintenance" }
+	},
+	"admin/network/qos-ex/system/autosetup": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/overview" }
+	},
+	"admin/network/qos-ex/shaper": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/setup" }
+	},
+	"admin/network/qos-ex/settings": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/setup" }
+	},
+	"admin/network/qos-ex/qdisc": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/setup" }
+	},
+	"admin/network/qos-ex/rules": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/setup" }
+	},
+	"admin/network/qos-ex/classification": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/setup" }
+	},
+	"admin/network/qos-ex/nft": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/setup" }
+	},
+	"admin/network/qos-ex/stats": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/live/stats" }
+	},
+	"admin/network/qos-ex/flows": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/live/flows" }
+	},
+	"admin/network/qos-ex/connections": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/live/flows" }
+	},
+	"admin/network/qos-ex/status": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/system/status" }
+	},
+	"admin/network/qos-ex/advanced": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/system/status" }
+	},
+	"admin/network/qos-ex/advanced/status": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/system/status" }
+	},
+	"admin/network/qos-ex/advanced/logs": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/system/logs" }
+	},
+	"admin/network/qos-ex/advanced/maintenance": {
+		"action": { "type": "alias", "path": "admin/network/qos-ex/system/maintenance" }
+	}
+}

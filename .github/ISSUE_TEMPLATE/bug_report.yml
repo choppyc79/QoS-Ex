@@ -1,0 +1,49 @@
+name: Report a problem
+description: Something in QoS-Ex is not working as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you write anything, get the debug report from your router. It holds the versions, your router and OpenWrt release, the QoS-Ex settings you have changed and the current state, so you do not have to type any of it.
+
+        1. In LuCI open **Network → QoS-Ex → System → Maintenance**.
+        2. Under **Diagnostics** press **Generate debug report**, then **Copy report**.
+        3. Paste it into the **Debug report** box below.
+
+        No web app? Run `qos-ex.sh debug` over SSH and copy the output.
+
+        The report already has your location, the router's name, its own IPv4 and IPv6 addresses, LAN addresses and MAC addresses removed. The addresses of the game servers and sites your devices talk to are left in.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part?
+      options:
+        - Shaper (speeds, queues, traffic rules)
+        - Ping Filter (servers, map, blocking)
+        - Web app (a page looks wrong or shows an error)
+        - Install or update
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What went wrong?
+      description: What you did, what you expected, and what happened instead. Add a screenshot if it is something you can see.
+      placeholder: "Example: Ping Filter is on with a 50 ms limit, but Fortnite on my PS5 sat in matchmaking for 5 minutes. Ping Filter → Servers showed every server as blocked."
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game and device (if it is about a game)
+      placeholder: "Fortnite on PS5, wired"
+  - type: textarea
+    id: report
+    attributes:
+      label: Debug report
+      description: Paste the whole report, from the first line of ==== to the last. If GitHub says it is too long, save it as a .txt file, drag the file into the What went wrong? box above, and write "attached" here.
+      render: text
+    validations:
+      required: true

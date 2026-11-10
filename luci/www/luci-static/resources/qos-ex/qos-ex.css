@@ -1,0 +1,1790 @@
+/* qos-ex-luci __VERSION__ -- shared stylesheet (JS framework)
+ *
+ * Surfaces, text and fonts come from the active LuCI theme (bootstrap,
+ * material, argon, openwrt2020; light or dark). The sheet keeps what the
+ * views need to work -- grids, flex rows, gaps, sizes, scroll boxes, the map
+ * frame -- then THEME HOOKS that colour state from the theme's variables,
+ * BOXES (frames and box titles), the LIVE PULSE, and (1.3.1.6) the GAMING
+ * LAYER at the end: the app's own accent and state colours, light or dark
+ * as the theme is, and the Overview's hero, switches, tiles and grades.
+ * Stock LuCI form markup (.cbi-*) is restyled only inside QoS-Ex's own
+ * wrappers (.qos-ex-scope, #cbi-qos-ex-*, .qos-ex-seg, the Stats tab bar's
+ * .qx-tabtools) and, under body.qx-app, for the map description and the
+ * active tab underline on QoS-Ex pages.
+ *
+ * SCOPING: every other rule is a .qos-ex-* / .pf-* / .pf2-* / .qx-* class
+ * the QoS-Ex views own (body.qx-app on QoS-Ex pages only) or the Map's
+ * Leaflet popup, and the --qx-* colour names are the app's own. Outside
+ * QoS-Ex the sheet loads only on LuCI's Status -> Overview, for the QoS-Ex
+ * tile (35_qos-ex.js requires the helpers module, which injects it). */
+
+.qos-ex-cmdbar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin: 0 0 16px 0;
+	padding: 10px 14px 10px 16px;
+	position: relative;
+	overflow: hidden;
+}
+.qos-ex-cmdbar small {
+	padding: 2px 9px;
+}
+body.qx-app .cbi-map-descr {
+	margin: 0 0 16px 0;
+	max-width: 92ch;
+	padding-left: 12px;
+}
+.qos-ex-card {
+	margin: 0 0 16px 0;
+}
+.qos-ex-card > .qos-ex-card-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.qos-ex-card .qos-ex-grid {
+	margin: 0;
+}
+.qos-ex-grid {
+	display: grid;
+	grid-template-columns: minmax(130px, max-content) 1fr;
+	gap: 0 20px;
+	margin: 0;
+	align-items: stretch;
+}
+.qos-ex-grid > div {
+	padding: 5px 0;
+	overflow-wrap: anywhere;
+}
+/* Key/value pairs two to a row on a wide box. */
+.qos-ex-grid.qos-ex-grid-4 { grid-template-columns: minmax(120px, max-content) 1fr minmax(120px, max-content) 1fr; }
+@media (max-width: 900px) { .qos-ex-grid.qos-ex-grid-4 { grid-template-columns: minmax(96px, max-content) 1fr; } }
+/* Two cards side by side, equal height (Status: qdisc setup left, class
+ * rates right); stacked on narrow screens. */
+.qos-ex-cols {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 12px;
+	margin: 0 0 12px 0;
+}
+.qos-ex-cols > .qos-ex-card { margin: 0; }
+@media (max-width: 800px) { .qos-ex-cols { grid-template-columns: 1fr; } }
+/* Class rates: name + figure over a bar scaled to the shaped rate. */
+.qos-ex-rates { display: grid; grid-template-columns: max-content 1fr 1fr; gap: 10px 18px; align-items: center; }
+.qos-ex-rates > .qos-ex-rates-h { padding-bottom: 2px; }
+.qos-ex-rate { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.qos-ex-rate > span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.qos-ex-rate .qos-ex-share { flex: 0 0 auto; min-width: 0; }
+.qos-ex-rate .qos-ex-share > i { background: currentColor; opacity: .55; }
+.qos-ex-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 12px 0 0;
+}
+.pf-keyline {
+	margin-top: 8px;
+}
+.qos-ex-svc {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+}
+.qos-ex-svc .btn[disabled] {
+	cursor: default;
+}
+.qos-ex-grid code,
+.qos-ex-card code,
+.leaflet-popup-content code,
+.qos-ex-tbl code {
+	padding: 1.5px 6px;
+}
+.qos-ex-bar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 9px 14px;
+	align-items: center;
+	margin: 0 0 12px 0;
+	padding: 11px 13px;
+}
+.qos-ex-bar label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+}
+.qos-ex-bar select,
+.qos-ex-bar input[type=text] {
+	padding: 4px 8px;
+	height: 28px;
+	box-sizing: border-box;
+}
+.qos-ex-bar input[type=text] {
+	flex: 1 1 220px;
+	min-width: 160px;
+}
+.qos-ex-bar .qos-ex-spacer {
+	flex: 1 1 auto;
+}
+.qos-ex-bar.qos-ex-bar-grid {
+	align-items: flex-end;
+	gap: 8px 10px;
+}
+.qos-ex-bar .qos-ex-field {
+	display: inline-flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 3px;
+	white-space: nowrap;
+}
+.qos-ex-bar .qos-ex-field select,
+.qos-ex-bar .qos-ex-field input[type=text] {
+	flex: 0 0 auto;
+	width: 100%;
+}
+.qos-ex-bar .qos-ex-field.wide {
+	flex: 1 1 200px;
+	min-width: 150px;
+}
+.qos-ex-bar-sep {
+	align-self: stretch;
+	width: 1px;
+	margin: 3px 3px 5px;
+}
+.qos-ex-bar .qos-ex-chip {
+	align-self: flex-end;
+	gap: 7px;
+	cursor: pointer;
+	user-select: none;
+	height: 28px;
+	padding: 0 11px;
+	box-sizing: border-box;
+}
+.qos-ex-bar .qos-ex-chip input[type=checkbox] {
+	margin: 0;
+}
+.qos-ex-bar .qos-ex-bar-btn {
+	height: 28px;
+	padding: 0 13px;
+	cursor: pointer;
+}
+.qos-ex-bar .qos-ex-bar-count {
+	align-self: flex-end;
+	padding-bottom: 6px;
+}
+.qos-ex-tiles {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin: 0 0 12px 0;
+}
+.qos-ex-tile {
+	flex: 1 1 140px;
+	min-width: 130px;
+	padding: 10px 12px;
+}
+.qos-ex-tile-l {
+	white-space: nowrap;
+}
+.qos-ex-tile-v {
+	margin-top: 3px;
+	overflow-wrap: anywhere;
+}
+.qos-ex-checks {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+	gap: 9px 18px;
+}
+.qos-ex-check {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.qos-ex-check .dot {
+	width: 9px;
+	height: 9px;
+	flex: 0 0 auto;
+}
+.qos-ex-chart-wrap {
+	padding: 6px 8px 2px;
+	margin: 0 0 10px 0;
+}
+.qos-ex-chart-h {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	margin-bottom: 2px;
+}
+.qos-ex-chart-note {
+	text-align: center;
+	flex: 1 1 auto;
+}
+/* Stats: the Download / Upload tabs with the refresh selector at the right. */
+.qos-ex-chart-rate {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+.qos-ex-chart-rate select {
+	padding: 1px 4px;
+	height: auto;
+	min-width: 0;
+	width: auto;
+}
+.qos-ex-chart {
+	width: 100%;
+	height: 132px;
+	display: block;
+}
+.qos-ex-legend {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+	gap: 4px 14px;
+	margin: 2px 0 4px;
+}
+.qos-ex-legend > span {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.qos-ex-legend i.sw {
+	width: 10px;
+	height: 10px;
+	display: inline-block;
+	margin-right: 5px;
+	vertical-align: -1px;
+}
+.qos-ex-sharewrap {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 108px;
+}
+.qos-ex-sharep {
+	text-align: right;
+	min-width: 40px;
+	flex: 0 0 auto;
+}
+.qos-ex-share {
+	height: 6px;
+	overflow: hidden;
+	flex: 1 1 auto;
+	min-width: 54px;
+}
+/* The fill is a block: as an inline-block it sat on the text baseline of a
+ * 6px box and was clipped away. */
+.qos-ex-share > i {
+	display: block;
+	height: 100%;
+	min-width: 2px;
+	background: var(--primary-color-high, #0069d6);
+	transition: width .4s;
+}
+details.qos-ex-raw {
+	margin-top: 4px;
+}
+details.qos-ex-raw > summary {
+	cursor: pointer;
+	padding: 5px 0;
+	user-select: none;
+}
+.qos-ex-badge-game {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 0 5px;
+	vertical-align: middle;
+}
+.qos-ex-tbl {
+	width: 100%;
+	min-width: 760px;
+	border-collapse: collapse;
+	table-layout: auto;
+}
+.qos-ex-tbl thead th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	white-space: nowrap;
+	text-align: left;
+	padding: 8px 9px;
+}
+.qos-ex-tbl td {
+	padding: 7px 9px;
+	vertical-align: top;
+}
+.qos-ex-tbl td.r,
+.qos-ex-tbl th.r {
+	text-align: right;
+	white-space: nowrap;
+}
+.qos-ex-tbl td.ip {
+	word-break: break-all;
+	max-width: 160px;
+	overflow-wrap: anywhere;
+}
+/* Port lists grow with their contents (field-sizing; the Setup view sets
+ * the size attribute where that is unsupported) up to the box. */
+#cbi-qos-ex-ports .cbi-value-field { min-width: 0; }
+#cbi-qos-ex-ports .cbi-value-field input {
+	width: auto !important;
+	min-width: 210px;
+	max-width: 100%;
+	field-sizing: content;
+}
+/* Setup -> Devices & Ports: one table, a row per device with a
+ * Normal / Gaming / Low priority choice, the card's full width. Rows are a
+ * fixed height (--qx-row; taller where the choice wraps under the name on a
+ * phone) so exactly ten show and more scroll. The name, then its address
+ * and MAC, on one line (stacked on a phone), cut with an ellipsis, so
+ * nothing outgrows its row. */
+/* The table is its form row's only child, and the row is a flex box in every
+ * theme: without this it shrank to its widest device. */
+.qos-ex-dev { flex: 1 1 100%; min-width: 0; }
+.qos-ex-dev-id { display: flex; align-items: baseline; gap: 0 16px; min-width: 0; }
+.qos-ex-dev-id > .qos-ex-dev-name { flex: 0 1 auto; }
+.qos-ex-dev-id > .qos-ex-dev-sub { flex: 0 1 auto; min-width: 0; }
+.qos-ex-dev-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 8px; }
+.qos-ex-dev-rows + .qos-ex-dev-bar { margin: 8px 0 0; }
+.qos-ex-dev-q { flex: 1 1 14em; min-width: 0; max-width: 24em; }
+.qos-ex-dev-rows {
+	--qx-row: 3.5em;
+	max-height: calc(var(--qx-row) * 10 + 2px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.qos-ex-dev-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 4px 12px;
+	box-sizing: border-box;
+	height: var(--qx-row);
+	overflow: hidden;
+	padding: 4px 8px;
+}
+.qos-ex-dev-row[hidden] { display: none; }
+.qos-ex-dev-name, .qos-ex-dev-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qos-ex-dev-sub { font-size: 12px; font-variant-numeric: tabular-nums; }
+.qos-ex-seg { display: inline-flex; }
+.qos-ex-seg > .cbi-button { margin: 0; min-width: 0; padding: 0 10px; border-radius: 0; }
+.qos-ex-seg > .cbi-button:first-child { border-radius: 4px 0 0 4px; }
+.qos-ex-seg > .cbi-button:last-child { border-radius: 0 4px 4px 0; }
+.qos-ex-seg > .cbi-button + .cbi-button { margin-left: -1px; }
+@media (max-width: 600px) {
+	.qos-ex-dev-rows { --qx-row: 6.25em; }
+	.qos-ex-dev-row { grid-template-columns: minmax(0, 1fr); }
+	.qos-ex-dev-id { display: block; }
+	.qos-ex-seg { justify-self: start; }
+}
+/* Setup -> Queue and Rules: every queue type's and every rule set's fields
+ * are on the page; the wrapper's data-qdisc / data-nft picks what shows.
+ * Hidden here rather than with depends(), which deletes the option. */
+.qos-ex-scope[data-qdisc="cake"] .cbi-section:has(> #cbi-qos-ex-hfsc),
+.qos-ex-scope[data-qdisc="hfsc"] .cbi-section:has(> #cbi-qos-ex-cake),
+.qos-ex-scope[data-qdisc="htb"] .cbi-section:has(> #cbi-qos-ex-cake),
+.qos-ex-scope[data-qdisc="htb"] .cbi-value[data-name="game_burst"],
+.qos-ex-scope[data-qdisc="htb"] .cbi-value[data-name="voice_rt"],
+.qos-ex-scope[data-qdisc="cake"] .cbi-value[data-name="_classes"],
+.qos-ex-scope[data-qdisc="cake"] .cbi-value[data-name="bw_max_ratio"],
+.qos-ex-scope[data-qdisc="cake"] .cbi-value[data-name="bw_max_ratio_n"],
+.qos-ex-scope[data-mss="inactive"] .cbi-value[data-name="mss_max_kbps"],
+.qos-ex-scope[data-nft="advanced"] .cbi-value[data-name^="sim_"],
+.qos-ex-scope[data-nft="advanced"] .cbi-value[data-name="udp_fast_pps"],
+.qos-ex-scope[data-nft="advanced"] .cbi-value[data-name="udp_fast_burst"],
+.qos-ex-scope[data-nft="advanced"] .cbi-value[data-name="adv_udp_small_avgpkt"],
+.qos-ex-scope[data-nft="advanced"] .cbi-value[data-name="tcp_new_cap_mbit"],
+.qos-ex-scope[data-nft="simple"] .cbi-value[data-name^="adv_"],
+.qos-ex-scope:not([data-nft="adaptive"]) .cbi-value[data-name^="ada_"],
+.qos-ex-scope[data-nft="adaptive"] .cbi-value[data-name^="sim_"],
+.qos-ex-scope[data-nft="adaptive"] .cbi-value[data-name^="adv_"]:not([data-name="adv_udp_small_avgpkt"]):not([data-name="adv_bulk_timeout"]),
+.qos-ex-scope[data-nft="adaptive"] .cbi-value[data-name="tcp_new_cap_mbit"],
+.qos-ex-scope[data-nft="adaptive"] .cbi-value[data-name="tcp_bulk_cap_mbit"] { display: none !important; }
+@media (max-width: 600px) {
+	#cbi-qos-ex-ports .cbi-value-field input { min-width: 0; width: 100% !important; }
+}
+.qos-ex-pre {
+	padding: 13px 15px;
+	overflow: auto;
+	white-space: pre-wrap;
+	min-height: 6em;
+}
+.qos-ex-pf-adv-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 10px;
+	margin: 4px 0 8px 0;
+}
+.qos-ex-pf-adv-btn {
+	min-width: 11em;
+}
+.qos-ex-pf-adv-meta {
+	margin: 0 0 6px 0;
+}
+.pf-stats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+	margin: 0;
+}
+.pf-card {
+	position: relative;
+	overflow: hidden;
+	flex: 1 1 132px;
+	min-width: 120px;
+	padding: 13px 15px;
+	box-sizing: border-box;
+}
+.pf-card .pf-value {
+	margin-top: 3px;
+}
+.pf2-hero {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 14px;
+	justify-content: space-between;
+	padding: 14px 16px;
+}
+/* Separate borders: in a collapsed table the sticky header cells leave the
+ * scrolled rows painting through above them (same fix as Flows). */
+.pf2-ladder {
+	width: 100%;
+	border-collapse: separate;
+	border-spacing: 0;
+}
+.pf2-ladder td {
+	padding: 7px 10px;
+}
+.pf2-ladder th {
+	text-align: left;
+	padding: 7px 10px;
+}
+.pf2-best {
+	margin-left: 6px;
+}
+.pf2-rmbtn {
+	padding: 2px 9px;
+	min-height: 0;
+}
+.pf2-row {
+	position: relative;
+}
+.pf2-now-grid {
+	display: flex;
+	align-items: center;
+	gap: 18px;
+	flex-wrap: wrap;
+}
+.pf2-now-score {
+	text-align: center;
+	min-width: 64px;
+}
+.pf2-now-stats {
+	display: flex;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+.pf2-legend {
+	margin: 2px 0 8px;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex-wrap: wrap;
+}
+.pf2-dot {
+	display: inline-block;
+	width: 9px;
+	height: 9px;
+	vertical-align: middle;
+	margin: 0 3px 0 8px;
+}
+.pf2-learn {
+	padding: 8px 12px;
+	margin: 10px 0;
+}
+.pf-fam6 {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 1px 5px;
+	vertical-align: middle;
+}
+.pf-actbtn {
+	display: inline-block;
+	padding: 4px 11px;
+	margin: 0 2px 0 0;
+	cursor: pointer;
+}
+.pf-map {
+	width: 100%;
+	height: 480px;
+	min-height: 480px;
+	box-sizing: border-box;
+	overflow: hidden;
+	position: relative;
+	display: block;
+}
+.pf-map .leaflet-container {
+	width: 100% !important;
+	height: 100% !important;
+}
+.pf-map-only {
+	position: relative;
+}
+.pf-map-only #pf-map {
+	width: 100%;
+	height: 640px;
+	min-height: 320px;
+}
+.pf-map-only[data-size="small"]  #pf-map {
+	height: 340px;
+}
+.pf-map-only[data-size="medium"] #pf-map {
+	height: 480px;
+}
+.pf-map-only[data-size="large"]  #pf-map {
+	height: 640px;
+}
+.pf-map-sizer {
+	display: inline-flex;
+	gap: 0;
+	align-items: center;
+	margin: 0 0 10px 0;
+	overflow: hidden;
+}
+.pf-map-sizer button {
+	padding: 5px 13px;
+	cursor: pointer;
+}
+.leaflet-popup-content .pf-popup-head {
+	margin-bottom: 5px;
+}
+.leaflet-popup-content .pf-popup-src {
+	margin-top: 2px;
+}
+.leaflet-popup-content .pf-popup-actions {
+	display: flex;
+	gap: 5px;
+	margin-top: 9px;
+	flex-wrap: wrap;
+}
+.leaflet-popup-content .pf-popup-scroll {
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+/* Server rows in a map popup: fixed 46px so the 4-row scroll box always
+   cuts between rows. Line 1 = ip / state / ping / W B, line 2 = meta. */
+.leaflet-popup-content .pf-prow {
+	height: 46px;
+	box-sizing: border-box;
+	padding: 4px 0;
+	border-top: 1px solid rgba(127,127,127,0.15);
+	font-size: 12px;
+}
+.leaflet-popup-content .pf-prow-l {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	height: 24px;
+}
+.leaflet-popup-content .pf-prow-ip {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.leaflet-popup-content .pf-prow-ms {
+	width: 44px;
+	text-align: right;
+	font-weight: bold;
+}
+.leaflet-popup-content .pf-prow-btns { white-space: nowrap; }
+.leaflet-popup-content .pf-prow-btns .pf-popup-btn {
+	padding: 0 7px;
+	height: 22px;
+	min-height: 0;
+	line-height: 20px;
+	font-size: 11px;
+}
+.leaflet-popup-content .pf-prow-m {
+	height: 13px;
+	line-height: 13px;
+	margin-top: 1px;
+	font-size: 11px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* Popup opened from the top half of the map hangs BELOW the marker (tip
+   flipped to point up) so it opens toward the free space. */
+.leaflet-popup.pf-pop-below {
+	bottom: auto !important;
+	top: 18px;
+	margin-bottom: 0;
+}
+.leaflet-popup.pf-pop-below .leaflet-popup-tip-container {
+	top: -19px;
+	transform: rotate(180deg);
+}
+.leaflet-popup-content .pf-popup-btn,
+.leaflet-popup-content button {
+	padding: 4px 10px;
+	margin: 0;
+	cursor: pointer;
+}
+.leaflet-popup-content .pf-popup-btn:disabled {
+	cursor: wait;
+}
+.pf-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+}
+.pf-legend-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	cursor: pointer;
+	padding: 3px 10px;
+}
+.pf-legend-dot {
+	width: 9px;
+	height: 9px;
+	flex-shrink: 0;
+}
+.pf-devbox {
+	min-height: 74px;
+	max-height: 74px;
+	overflow-y: auto;
+	padding-right: 4px;
+}
+/* "address · MAC" is wider than the tile: wrap it, never clip it. */
+.pf-devbox > div {
+	overflow-wrap: anywhere;
+}
+.pf-nogeo-pin {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin: 2px 6px 2px 0;
+}
+.pf-nogeo-pin button {
+	padding: 1px 7px;
+}
+.pf-badge-connected {
+	display: inline-block;
+	width: 9px;
+	height: 9px;
+	margin-right: 5px;
+	vertical-align: middle;
+}
+.pf-lists-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+	gap: 16px;
+	margin-top: 4px;
+}
+.pf-lists-grid > .qos-ex-card {
+	margin-bottom: 0;
+}
+.pf-list-card {
+	display: flex;
+	flex-direction: column;
+}
+.pf-list-card > .qos-ex-card-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.pf-list-dot {
+	display: inline-block;
+	width: 9px;
+	height: 9px;
+	flex-shrink: 0;
+}
+.pf-list-scroll {
+	min-height: 40vh;
+	max-height: 40vh;
+	overflow-y: auto;
+	margin-bottom: 10px;
+}
+.pf-list-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 10px;
+}
+.pf-list-row-main {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1;
+}
+.pf-list-row-meta {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	flex-shrink: 0;
+}
+.pf-list-ping {
+	min-width: 50px;
+	text-align: right;
+}
+.pf-list-last {
+	min-width: 30px;
+	text-align: right;
+}
+.pf-list-count {
+	margin-left: auto;
+}
+.pf-list-empty {
+	padding: 12px;
+}
+.pf-list-add {
+	display: flex;
+	gap: 7px;
+	margin-top: auto;
+}
+.pf-list-add input {
+	flex: 1;
+	padding: 6px 10px;
+}
+.pf-list-add button {
+	padding: 6px 15px;
+	cursor: pointer;
+}
+.pf2-ladder-scroll,
+.pf-devbox,
+.pf-list-scroll,
+.pf-serverlist-wrap {
+	overflow-anchor: none;
+}
+.pf-serverlist-wrap {
+	height: 60vh;
+	min-height: 40vh;
+	max-height: 60vh;
+	overflow: auto;
+}
+.pf-serverlist-wrap thead th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+}
+@media (max-width: 600px) {
+.qos-ex-cmdbar {
+		padding: 9px 12px 9px 14px;
+	}
+	.qos-ex-grid {
+		grid-template-columns: minmax(96px, max-content) 1fr;
+		gap: 0 12px;
+	}
+	.pf-stats {
+		gap: 8px;
+	}
+	.pf-card {
+		flex: 1 1 calc(50% - 4px);
+		min-width: 0;
+	}
+	.qos-ex-bar {
+		flex-direction: column;
+		align-items: stretch;
+	}
+	.qos-ex-bar select,
+	.qos-ex-bar input[type=text] {
+		width: 100%;
+		flex: 1 1 auto;
+	}
+	.qos-ex-pf-adv-btn {
+		flex: 1 1 100%;
+		min-width: 0;
+	}
+	.qos-ex-tile {
+		flex-basis: 44%;
+		min-width: 0;
+	}
+	.qos-ex-chart {
+		height: 108px;
+	}
+	.qos-ex-tbl td,
+	.qos-ex-tbl thead th {
+		padding: 5px 6px;
+	}
+	.pf-map-only[data-size="large"] #pf-map {
+		height: 460px;
+	}
+}
+@media (pointer: coarse) {
+.pf-actbtn,
+	.pf-popup-btn,
+	.pf-list-add button,
+	.pf-map-sizer button {
+		padding: 8px 13px;
+	}
+	.pf-list-row {
+		padding: 11px;
+	}
+	.pf-actbtn {
+		margin-bottom: 2px;
+	}
+}
+.pf2-spark {
+	margin-top: 10px;
+	padding: 4px 6px;
+}
+.pf2-spark-legend {
+	margin-top: 4px;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+.pf2-spark-key {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	margin: 0 3px 0 8px;
+	vertical-align: middle;
+}
+.pf2-spark-key:first-child {
+	margin-left: 0;
+}
+
+/* ============================================================================
+ * THEME HOOKS -- state colours. Everything here takes its colour
+ * from the active LuCI theme's own variables (bootstrap names; the fallbacks
+ * cover material / openwrt2020, which do not define them). They exist because
+ * these elements carry meaning in their colour: state text, on/off and
+ * allowed/blocked badges, health-check and "connected" dots, and table rules
+ * for the app's own tables (bootstrap only draws .table/.tr/.td markup).
+ * ==========================================================================*/
+.qos-ex-ok        { color: var(--success-color-high, #46a546); }
+.qos-ex-err       { color: var(--error-color-high, #c43c35); }
+.qos-ex-warn-text { color: var(--warn-color-high, #c09000); }
+:root[data-darkmode="false"] .qos-ex-warn-text,
+:root:not([data-darkmode]) .qos-ex-warn-text { color: #b07d00; }
+.qos-ex-muted     { color: var(--text-color-medium, #808080); }
+
+/* On/off, activity, server-state and score badges are LuCI .label
+ * elements drawn as soft pills: a light tint of the state colour with the
+ * text and a hairline edge in that colour (--pf-c), rather than a solid
+ * block. State colours are the theme's success / error / warn / primary.
+ * Without color-mix the tint falls back to transparent (outline only). */
+.label.pf-pill, .label.pf-badge, .label.pf-score, .label.pf-fam6, .label.pf2-best {
+	--pf-c: var(--text-color-medium, #808080);
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 2px 8px;
+	line-height: 14px;
+	border-radius: 999px;
+	vertical-align: middle;
+	color: var(--pf-c);
+	background: transparent;
+	background: color-mix(in srgb, var(--pf-c) 14%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pf-c) 45%, transparent);
+}
+/* Setup -> Devices & Ports: the table's frame and row rules, and the
+ * chosen class tinted like the pills (Gaming success, Low priority warn). */
+.qos-ex-dev-rows { border: 1px solid var(--border-color-medium, #ddd); border-radius: 4px; }
+.qos-ex-dev-row + .qos-ex-dev-row { border-top: 1px solid var(--border-color-low, #eee); }
+.qos-ex-seg > .cbi-button.sel {
+	--pf-c: var(--text-color-medium, #808080);
+	position: relative;
+	color: var(--pf-c);
+	background: color-mix(in srgb, var(--pf-c) 16%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pf-c) 60%, transparent);
+}
+.qos-ex-seg > .cbi-button.sel[data-v="gaming"]  { --pf-c: var(--success-color-high, #46a546); }
+.qos-ex-seg > .cbi-button.sel[data-v="lowprio"] { --pf-c: var(--warn-color-high, #c09000); }
+:root[data-darkmode="false"] .qos-ex-seg > .cbi-button.sel[data-v="lowprio"],
+:root:not([data-darkmode]) .qos-ex-seg > .cbi-button.sel[data-v="lowprio"] { --pf-c: #b07d00; }
+.label.pf-pill.on, .label.pf-pill.active,
+.label.pf-badge.allowed, .label.pf-badge.whitelist,
+.label.pf-score.good          { --pf-c: var(--success-color-high, #46a546); }
+.label.pf-pill.off,
+.label.pf-badge.blocked, .label.pf-badge.blacklist,
+.label.pf-score.poor          { --pf-c: var(--error-color-high, #c43c35); }
+.label.pf-pill.matchmaking,
+.label.pf-score.ok            { --pf-c: var(--warn-color-high, #c09000); }
+:root[data-darkmode="false"] .label.pf-pill.matchmaking,
+:root[data-darkmode="false"] .label.pf-score.ok,
+:root:not([data-darkmode]) .label.pf-pill.matchmaking,
+:root:not([data-darkmode]) .label.pf-score.ok { --pf-c: #b07d00; }
+.label.pf2-best, .label.pf-fam6 { --pf-c: var(--primary-color-high, #0069d6); }
+/* Score: fixed width so a column of them lines up. */
+.label.pf-score {
+	justify-content: center;
+	min-width: 2.4em;
+	box-sizing: border-box;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Status dots: round, coloured by state. */
+.qos-ex-check .dot, .pf-badge-connected, .pf-legend-dot, .pf-list-dot, .pf2-dot,
+.pf2-spark-key, .qx-dev-dot { display: inline-block; border-radius: 50%; }
+.qos-ex-check.ok .dot, .pf-badge-connected, .pf-list-dot.wl, .qx-dev-dot.on { background: var(--success-color-high, #46a546); }
+.qos-ex-check.bad .dot, .pf-list-dot.bl, .qx-dev-dot.off                  { background: var(--error-color-high, #c43c35); }
+.qx-dev-dot { width: 9px; height: 9px; margin-right: 5px; }
+.pf-list-dot { width: 9px; height: 9px; }
+.pf-legend-dot { display: inline-block; background: currentColor; }
+.pf-legend-dot.hollow, .pf-legend-dot.ring { background: transparent; border: 2px solid currentColor; box-sizing: border-box; }
+.pf-legend-dot.dashed { background: transparent; border: 2px dashed currentColor; box-sizing: border-box; }
+.pf-legend-chip[aria-pressed="false"] { opacity: .45; }
+.qos-ex-legend .sw { display: inline-block; }
+.qos-ex-strike { text-decoration: line-through; }
+/* Maintenance > Versions & updates: component | installed | latest | state. */
+.qos-ex-upd { display: grid; grid-template-columns: max-content max-content max-content 1fr; gap: 6px 22px; align-items: center; }
+.qos-ex-upd > .qos-ex-upd-h { color: var(--text-color-medium, #808080); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.qos-ex-upd-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.qos-ex-upd-bar label { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 0 auto; }
+/* Greyed out while an update runs (or when there is nothing to update):
+   whatever the theme does with a disabled button. Update now spins
+   instead (LuCI's busy look, the theme's .spinning) until 100%. */
+.qos-ex-upd-bar .cbi-button:disabled:not(.spinning) { opacity: .45; filter: grayscale(1); cursor: not-allowed; }
+.qos-ex-upd-bar .cbi-button.spinning { cursor: progress; }
+.qos-ex-upd-banner { margin: 0 0 12px; padding: 6px 12px; border-radius: 6px; font-size: 13px;
+	border-left: 3px solid var(--warn-color-high, #c09000);
+	background: color-mix(in srgb, var(--warn-color-high, #c09000) 12%, transparent); }
+
+/* The app's own tables and key/value grids: row rules in the theme's border
+ * colour; sticky headers need the page colour behind them. */
+.qos-ex-tbl td, .pf2-ladder td {
+	border-top: 1px solid var(--border-color-medium, #ddd);
+}
+/* Header cells are sticky inside the scroll boxes: a solid background and a
+ * bottom rule drawn as a shadow (a border on a sticky cell leaves a gap the
+ * scrolled rows show through). */
+.qos-ex-tbl thead th, .pf2-ladder th {
+	font-weight: bold;
+	background: var(--background-color-high, #fff);
+	box-shadow: inset 0 -1px 0 var(--border-color-medium, #ddd);
+}
+.qos-ex-grid > div { border-top: 1px solid var(--border-color-low, #eee); }
+.qos-ex-grid > div:nth-child(-n+2) { border-top: none; }
+@media (min-width: 901px) { .qos-ex-grid.qos-ex-grid-4 > div:nth-child(-n+4) { border-top: none; } }
+.qos-ex-share { background: var(--border-color-low, #eee); }
+
+/* ============================================================================
+ * BOXES -- one look on every tab. Each top-level block (cards, command bars,
+ * stock form sections, stat tiles, the map) sits in a box with a faint
+ * border, and each box title has a faint rule under it. Colours are the
+ * theme's own border/text variables, so light and dark both follow LuCI.
+ * ==========================================================================*/
+.qos-ex-card,
+.qos-ex-cmdbar,
+.pf2-learn,
+.qos-ex-scope .cbi-map > .cbi-section {
+	border: 1px solid var(--border-color-medium, #ddd);
+	border-radius: 6px;
+	padding: 10px 14px;
+	margin: 0 0 12px 0;
+	box-sizing: border-box;
+}
+/* A card inside a card keeps the lighter line so the nesting reads. */
+.qos-ex-card .qos-ex-card,
+.pf-lists-grid > .qos-ex-card { border-color: var(--border-color-low, #eee); }
+
+/* Form rows sit closer than the theme default. */
+.qos-ex-scope .cbi-value { margin-bottom: 8px; }
+.qos-ex-scope .cbi-value-last { margin-bottom: 0; }
+
+/* Box titles: compact, with a short accent bar in the theme's primary
+ * colour leading the text. */
+.qos-ex-card > .qos-ex-card-title,
+.qos-ex-scope .cbi-map > .cbi-section > h3,
+.qos-ex-scope .cbi-map > .cbi-section > legend {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin: 0 0 8px 0;
+	padding: 0 0 6px 0;
+	font-size: 15px;
+	line-height: 22px;
+	border-bottom: 1px solid var(--border-color-low, #eee);
+}
+.qos-ex-card > .qos-ex-card-title::before,
+.qos-ex-scope .cbi-map > .cbi-section > h3::before {
+	content: "";
+	flex: 0 0 auto;
+	width: 3px;
+	height: 15px;
+	border-radius: 2px;
+	background: var(--primary-color-high, #0069d6);
+}
+/* Title tools (pills, buttons) push to the right end of the title row. */
+.qos-ex-card-title > .qos-ex-tools { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; font-weight: normal; }
+
+/* PAGE HEADER -- the banner above the tab row on every page (h.appBar):
+ * app and page name, the state pills, then the versions at the right.
+ * Tinted from the primary colour with an accent edge. */
+.qos-ex-cmdbar {
+	border-left: 3px solid var(--primary-color-high, #0069d6);
+	background: linear-gradient(90deg, color-mix(in srgb, var(--primary-color-high, #0069d6) 9%, transparent), transparent 70%);
+}
+.qos-ex-hdr { gap: 8px 10px; padding: 8px 12px; }
+.qos-ex-hdr-title { font-weight: bold; font-size: 16px; letter-spacing: .02em; margin-right: 4px; }
+.qos-ex-hdr-pills { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.qos-ex-hdr-pills .label { margin: 0; }
+.qos-ex-hdr-tools { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* The banner above the tab row (h.appBar): "QoS-Ex – <tab>", larger. */
+.qos-ex-appbar { margin: 0 0 12px 0; }
+.qos-ex-appbar .qos-ex-hdr-title { font-size: 20px; }
+.qos-ex-appbar .qos-ex-hdr-tools { font-size: 12px; }
+.qos-ex-appbar .qos-ex-hdr-pills:empty { display: none; }
+/* A page's controls (h.pageHead): one plain row under the tabs, at the right. */
+.qos-ex-toolrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; margin: 0 0 12px 0; }
+.qos-ex-toolrow:empty { display: none; }
+/* ...also when all it holds is the view's copy of this sheet (h.cssCopy). */
+.qos-ex-toolrow:not(:has(> :not(link))) { display: none; }
+
+/* Badges in a box title keep their own height. */
+.qos-ex-card-title .label { align-self: center; }
+/* A muted note in a box title reads as a note, not a second title. */
+.qos-ex-card-title .qos-ex-muted { font-weight: normal; }
+
+/* Stat tiles: a box each, muted label over a bold value. */
+.qos-ex-tile,
+.pf-card {
+	border: 1px solid var(--border-color-medium, #ddd);
+	border-top: 3px solid color-mix(in srgb, var(--primary-color-high, #0069d6) 65%, transparent);
+	border-radius: 6px;
+}
+.pf-stats { margin: 0 0 12px 0; }
+.qos-ex-tile-l, .pf-label, .qos-ex-tile-sub { color: var(--text-color-medium, #808080); }
+.qos-ex-tile-v, .pf-value { font-weight: bold; font-size: 1.25em; }
+.qos-ex-tile-l, .pf-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+
+/* Rows highlight under the pointer (theme's low background). */
+.qos-ex-tbl tbody tr:hover > td,
+.pf2-ladder tbody tr:hover > td { background: var(--background-color-low, #f7f7f7); }
+/* Ladder / server rows open a detail row on click (as Flows). */
+.pf2-ladder tr.pf2-row, .pf-rows tr.pf-row { cursor: pointer; }
+:is(.pf2-ladder, .pf-rows) tr.pf2-det > td { white-space: normal; padding: 8px 12px 10px; cursor: default; }
+:is(.pf2-ladder, .pf-rows) tr.open > td { background: var(--background-color-low, #f7f7f7); }
+.pf-rows td.pf-acts { white-space: nowrap; }
+.pf-rows td.pf-acts .pf-actbtn { margin-left: 4px; }
+.pf-list-wrap { height: auto; min-height: 30vh; }
+.qos-ex-pf-adv-rows { grid-template-columns: max-content 1fr; align-items: center; }
+.qos-ex-pf-adv-rows .qos-ex-pf-adv-btn { width: 100%; }
+@media (max-width: 600px) { .qos-ex-pf-adv-rows { grid-template-columns: 1fr; } .qos-ex-pf-adv-rows > div:nth-child(even) { padding-top: 0; } }
+
+/* ============================================================================
+ * LIVE PULSE -- only while a match is being played: the map cell holding the
+ * server the Dashboard's Now playing card shows, and that server's own dot
+ * (Now playing, quality ladder, map popup, Servers page, legend).
+ * Other connected servers keep a still dot. Green = the theme's success
+ * colour; whitelist / blacklist cells pulse in their ring colour, and a
+ * blacklisted one pulses fast (traffic to it means the block is not holding).
+ * ==========================================================================*/
+@keyframes qos-ex-pulse {
+	0%   { box-shadow: 0 0 0 0    color-mix(in srgb, var(--qx-acc-2) 80%, transparent); opacity: 1; }
+	50%  { opacity: .45; }
+	70%  { box-shadow: 0 0 0 8px  transparent; }
+	100% { box-shadow: 0 0 0 0    transparent; opacity: 1; }
+}
+/* 1.3.2.3: the server being played flashes blue; the Map's own pulse
+ * (.pf-pulse below) keeps the dot's colour. */
+.pf-badge-connected.pf-live { animation: qos-ex-pulse 1.2s ease-out infinite; }
+/* Animations reduced in the OS / browser: the list dot blinks instead.
+ * !important because themes commonly zero every animation in this state. */
+@keyframes qos-ex-blink {
+	0%, 100% { opacity: 1; }
+	50%      { opacity: .25; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.pf-badge-connected.pf-live { animation: qos-ex-blink 1.4s ease-in-out infinite !important; }
+}
+/* The Map's playing-dot pulse: a ring (i) and a glow (b), 22px circles
+ * centred on the dot, in the dot's colour. The Map view scales and fades
+ * them itself (a timer), so no setting or theme can switch the pulse off.
+ * No CSS filter on the map's dots: it made the whole vector layer flash
+ * while the map was moved or zoomed. */
+.pf-pulse { pointer-events: none; }
+.pf-pulse > i, .pf-pulse > b {
+	position: absolute; left: -11px; top: -11px; width: 22px; height: 22px;
+	box-sizing: border-box; border-radius: 50%; pointer-events: none;
+}
+.pf-pulse > i { border: 3px solid currentColor; }
+.pf-pulse > b { background: currentColor; opacity: .55; }
+
+/* Live tables hold still. Values rewrite every refresh; in the theme's
+ * proportional font every digit change re-measured the auto-layout columns
+ * and the whole table shifted sideways on each tick (1.0.6.0 regression).
+ * The data tables keep the pre-1.0.6.0 monospaced font, and every live
+ * number elsewhere uses fixed-width digits. */
+.qos-ex-tbl {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	font-size: 12px;
+}
+.qos-ex-tbl, .pf2-ladder td, .qos-ex-grid > div, .qos-ex-tile-v, .pf-value,
+.qos-ex-legend > span, .qos-ex-sharep, .pf-list-row-meta { font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .qos-ex-tbl { font-size: 11px; } }
+
+/* Flows: header bar (search + controls), a class strip that filters,
+ * then a stock LuCI table in a FIXED-height box under a sticky title row:
+ * flows coming and going change only the scrollbar, never the page. */
+.qos-ex-conn-q { width: 16em; max-width: 100%; }
+.qos-ex-chip-btn { cursor: pointer; user-select: none; }
+.qos-ex-chip-btn.on { box-shadow: inset 0 0 0 1px currentColor; }
+.qos-ex-conn-tog { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.qos-ex-conn tr.grp, .qos-ex-conn tr.flow { cursor: pointer; }
+.qos-ex-conn tr.grp td { background: color-mix(in srgb, currentColor 6%, transparent); }
+.qos-ex-conn tr.det .td { white-space: normal; padding: 8px 12px !important; }
+.qos-ex-conn-det { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; overflow-wrap: anywhere; }
+.qos-ex-conn-spark { width: 220px; max-width: 60%; height: 30px; vertical-align: middle; overflow: visible; }
+.qos-ex-conn-spark polyline { fill: none; stroke-width: 1.5; stroke-linejoin: round; }
+.qos-ex-conn-spark polygon { stroke: none; fill-opacity: .18; }
+.qos-ex-conn .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.qos-ex-conn-wrap { overflow-x: auto; }
+.qos-ex-conn {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.qos-ex-conn .td { vertical-align: top; white-space: nowrap; }
+.qos-ex-sbox > table.qos-ex-conn { table-layout: fixed; width: 100%; min-width: calc(98ch + 9 * 10px); }
+.qos-ex-conn .td, .qos-ex-conn .th { overflow: hidden; }
+.qos-ex-conn .th { white-space: nowrap; }
+.qos-ex-conn .td, .qos-ex-conn .th { padding: 5px !important; }
+.qos-ex-conn .th:first-child, .qos-ex-conn .td:first-child { padding-left: 8px !important; }
+.qos-ex-conn .td.qos-ex-ip { text-overflow: ellipsis; }
+.qos-ex-sbox > .qos-ex-conn { margin-bottom: 0; }
+@media (max-width: 600px) { .qos-ex-conn { font-size: 11px; } }
+
+/* Scroll box (Flows, PF Quality ladder): the Servers page pattern --
+ * one table, sticky header, fixed height, so the page around it never moves
+ * and only the rows inside change. Separate borders: collapsed ones let the
+ * scrolled rows paint through above the stuck header.
+ * Framed like the Active Ruleset <pre> so the box shows with 2 rows. The
+ * vertical bar is always drawn (overflow-y: scroll) and styled, which makes
+ * it a classic bar: an overlay bar fades out when idle and only came back
+ * when a refresh changed the content. */
+.qos-ex-sbox {
+	height: 60vh;
+	min-height: 260px;
+	overflow-x: auto;
+	overflow-y: scroll;
+	overflow-anchor: none;
+	background: var(--background-color-low, #f9f9f9);
+	border: 1px solid var(--border-color-medium, #ddd);
+	border-radius: 3px;
+}
+.qos-ex-sbox::-webkit-scrollbar { width: 12px; height: 12px; }
+.qos-ex-sbox::-webkit-scrollbar-track, .qos-ex-sbox::-webkit-scrollbar-corner {
+	background: var(--background-color-medium, #eee);
+}
+/* The bar starts under the sticky header (--qos-ex-head = its live height). */
+.qos-ex-sbox::-webkit-scrollbar-track:vertical { margin-top: var(--qos-ex-head, 0px); }
+.qos-ex-sbox::-webkit-scrollbar-thumb {
+	background: var(--border-color-high, #aaa);
+	border: 3px solid var(--background-color-medium, #eee);
+	border-radius: 6px;
+}
+/* The ladder fits its rows, up to 360px, then scrolls. */
+.qos-ex-sbox.pf2-ladder-scroll { height: auto; max-height: 360px; min-height: 0; overflow-y: auto; }
+.qos-ex-sbox > table { border-collapse: separate; border-spacing: 0; margin: 0; }
+.qos-ex-sbox > table > thead th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--background-color-high, #fff);
+	box-shadow: inset 0 -1px 0 var(--border-color-medium, #ddd);
+}
+/* Header cells in the app's own scroll boxes stick to the BOX top. footstrap
+ * makes a table's titles row sticky at its top bar's height (top layout,
+ * narrow window) to keep it in view while the PAGE scrolls; a sticky cell
+ * sticks to its nearest scroll box, so in ours the titles dropped a
+ * bar-height and covered the first rows (Overview Gaming flow, Flows, Stats
+ * tc tables). Its rule, `.table.fs-dt .tr.table-titles .th` (0,6,0), sits in
+ * a cascade layer, and so does the <head> copy of this sheet under footstrap:
+ * #view keeps this ahead of it there too. */
+#view :is(.qos-ex-sbox, .qos-ex-conn-wrap, .qos-ex-ctbl-wrap, .pf-serverlist-wrap, .qx-hscroll, .pf2-now-wrap) :is(th, .th) { top: 0; }
+
+/* The map sits in a faint frame. */
+.pf-map-only #pf-map {
+	border: 1px solid var(--border-color-low, #eee);
+	border-radius: 6px;
+}
+/* Stats charts (1.1.1.4): the SVG viewBox follows the box's pixel width, so
+ * axis text is never stretched; hover crosshair + tooltip; class chips; the
+ * counters table with trend sparklines and a totals row. */
+.qos-ex-ch-plot { position: relative; }
+.qos-ex-chart { overflow: visible; }
+.qos-ex-ch-grid { stroke: currentColor; stroke-opacity: .10; }
+.qos-ex-ch-base { stroke: currentColor; stroke-opacity: .30; }
+.qos-ex-ch-ref { stroke: currentColor; stroke-opacity: .55; stroke-dasharray: 5 4; }
+.qos-ex-ch-band { fill: #33cc66; fill-opacity: .09; }
+.qos-ex-ch-ax { fill: currentColor; fill-opacity: .55; font-size: 10px; }
+.qos-ex-ch-mark { fill: #e04545; font-size: 9px; }
+.qos-ex-ch-cross { stroke: currentColor; stroke-opacity: .45; pointer-events: none; }
+.qos-ex-ch-tip {
+	position: absolute;
+	top: 4px;
+	display: none;
+	z-index: 3;
+	pointer-events: none;
+	white-space: nowrap;
+	font-size: 12px;
+	line-height: 1.5;
+	padding: 6px 10px;
+	border-radius: 6px;
+	background: var(--background-color-high, #fff);
+	border: 1px solid var(--border-color-medium, #ddd);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+}
+.qos-ex-ch-tip .sw, .qos-ex-chip .sw, .qos-ex-ctbl .sw {
+	display: inline-block;
+	width: 9px;
+	height: 9px;
+	border-radius: 2px;
+	margin-right: 6px;
+	vertical-align: -1px;
+}
+.qos-ex-ch-tot { border-top: 1px solid var(--border-color-low, #eee); margin-top: 3px; padding-top: 3px; }
+.qos-ex-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 12px; }
+.qos-ex-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 2px 10px;
+	border-radius: 999px;
+	font-size: 12px;
+	background: color-mix(in srgb, currentColor 7%, transparent);
+	transition: opacity .15s;
+}
+.qos-ex-chip.dim, .qos-ex-ctbl tr.dim td { opacity: .4; }
+.qos-ex-ctbl-wrap { overflow-x: auto; }
+.qos-ex-ctbl { min-width: 900px; }
+.qos-ex-ctbl td { vertical-align: middle; font-variant-numeric: tabular-nums; }
+.qos-ex-ctbl tr.idle td { opacity: .55; }
+.qos-ex-ctbl tr.focus td { background: color-mix(in srgb, var(--primary-color-high, #0069d6) 8%, transparent); }
+.qos-ex-ctbl tfoot td { font-weight: bold; border-top: 2px solid var(--border-color-medium, #ddd); }
+.qos-ex-ctbl .qos-ex-share > i { background: var(--primary-color-high, #0069d6); opacity: .7; }
+.qos-ex-delta { margin-left: 4px; font-size: 11px; }
+
+/* ==========================================================================
+ * GAMING LAYER (1.3.1.6, colours 1.3.2.4). The app's own accent is teal;
+ * everything else is LuCI's own: green good / on, red off / stop, yellow
+ * warning, blue a match in play -- the theme's success / error / warn /
+ * primary colours, so they follow its light and dark. The values after
+ * each var() are for a theme that defines none. Light or dark of the
+ * accent follows the theme: _helpers.js qxTheme() reads the page
+ * background and sets data-qx-dark on <html>.
+ * ==========================================================================*/
+:root {
+	--qx-acc: #087a68;
+	--qx-acc-2: var(--primary-color-high, #1976d2);
+	--qx-good: var(--success-color-high, #17803f);
+	--qx-ok: var(--warn-color-high, #8a6100);
+	--qx-bad: var(--error-color-high, #c22b38);
+	--qx-line: color-mix(in srgb, currentColor 14%, transparent);
+	--qx-soft: color-mix(in srgb, currentColor 4%, transparent);
+}
+:root[data-qx-dark] {
+	--qx-acc: #2ee6c5;
+	--qx-acc-2: var(--primary-color-high, #4da1c0);
+	--qx-good: var(--success-color-high, #3ddc84);
+	--qx-ok: var(--warn-color-high, #ffc24b);
+	--qx-bad: var(--error-color-high, #ff5a6a);
+}
+
+/* Accent on the existing app chrome: banner, card title bars, tiles, the
+ * active tab on QoS-Ex pages, the server tags (catch, loc?), the in-match
+ * pill and the score pills. */
+.qx-acc { color: var(--qx-acc); }
+.qos-ex-cmdbar {
+	border-left-color: var(--qx-acc);
+	background: linear-gradient(90deg, color-mix(in srgb, var(--qx-acc) 12%, transparent), transparent 70%);
+}
+.qos-ex-appbar .qos-ex-hdr-title { letter-spacing: .01em; }
+.qx-hdr-page { font-weight: normal; }
+.qx-hdr-page::before { content: "/"; margin: 0 .4em; opacity: .35; }
+.qos-ex-card > .qos-ex-card-title::before,
+.qos-ex-scope .cbi-map > .cbi-section > h3::before { background: var(--qx-acc); }
+.qos-ex-tile, .pf-card { border-top-color: color-mix(in srgb, var(--qx-acc) 70%, transparent); }
+body.qx-app #tabmenu .tabs > li.active > a,
+body.qx-app .cbi-tabmenu > li.cbi-tab > a { color: var(--qx-acc); box-shadow: inset 0 -2px 0 var(--qx-acc); }
+/* footstrap (data-layout on <html>) fills the active tab with its own accent;
+ * the accent text and underline above sat on that fill. There the tab takes
+ * ours as a tint and a ring instead, like the app's selected buttons. */
+:root[data-layout] body.qx-app #tabmenu .tabs > li.active > a,
+:root[data-layout] body.qx-app .cbi-tabmenu > li.cbi-tab > a {
+	background: color-mix(in srgb, var(--qx-acc) 16%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--qx-acc) 55%, transparent);
+}
+.label.pf-badge.catch { --pf-c: var(--qx-acc); }
+.label.pf-pill.active { --pf-c: var(--qx-acc-2); }
+.label.pf-score.good { --pf-c: var(--qx-good); }
+.label.pf-score.ok   { --pf-c: var(--qx-ok); }
+.label.pf-score.poor { --pf-c: var(--qx-bad); }
+.pf-badge-connected.pf-live { background: var(--qx-acc-2); }
+
+/* Shared pieces. */
+.qx-label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: .06em;
+	color: var(--text-color-medium, #808080);
+}
+.qx-right { margin-left: auto; font-size: 12px; text-transform: none; letter-spacing: 0; }
+.qx-sub { font-size: 12px; color: var(--text-color-medium, #808080); }
+.qx-big { font-size: 28px; line-height: 1.15; font-weight: bold; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qx-big small { font-size: 13px; font-weight: normal; }
+.qx-big.qx-mid { font-size: 20px; }
+.qx-go { white-space: nowrap; font-size: 12px; }
+.qx-big.good, .qx-ctl-stat.on   { color: var(--qx-good); }
+.qx-big.ok, .qx-ctl-stat.warn   { color: var(--qx-ok); }
+.qx-big.poor, .qx-bad           { color: var(--qx-bad); }
+.qx-ctl-stat.play               { color: var(--qx-acc-2); }
+.qx-ctl-stat.off                { color: var(--text-color-medium, #808080); }
+
+/* On/off switch (h.qxSwitch): a button with role=switch. */
+.qx-switch {
+	position: relative;
+	flex: 0 0 auto;
+	width: 52px;
+	min-width: 52px;
+	height: 28px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 14px;
+	line-height: 0;
+	appearance: none;
+	background: color-mix(in srgb, currentColor 24%, transparent);
+	box-shadow: none;
+	cursor: pointer;
+	transition: background-color .2s;
+}
+.qx-switch > .qx-knob {
+	position: absolute;
+	top: 3px;
+	left: 3px;
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+	transition: left .2s;
+}
+.qx-switch > .qx-sw-txt {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	display: flex;
+	align-items: center;
+	font-size: 10px;
+	font-weight: 700;
+	line-height: 1;
+	color: #fff;
+	pointer-events: none;
+}
+.qx-switch[aria-checked="false"] { background: var(--qx-bad); }
+.qx-switch[aria-checked="false"] > .qx-sw-txt { right: 6px; }
+.qx-switch[aria-checked="true"] { background: var(--qx-good); }
+.qx-switch[aria-checked="true"] > .qx-sw-txt { left: 7px; }
+.qx-switch[aria-checked="true"] > .qx-knob { left: 27px; }
+.qx-switch:disabled { opacity: .45; cursor: not-allowed; }
+.qx-switch.busy { opacity: .7; cursor: progress; }
+.qx-switch:focus-visible { outline: 2px solid var(--qx-acc); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .qx-switch, .qx-switch > .qx-knob { transition: none; } }
+
+/* Overview: hero (Now playing | controls), tiles, at a glance. */
+.qx-hero { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; margin: 0 0 16px; }
+.qx-hero > .qos-ex-card { margin: 0; }
+.qx-now { display: flex; flex-direction: column; box-shadow: inset 0 3px 0 var(--qx-acc); }
+.qx-now > .qx-now-empty { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; }
+.qx-now.playing { box-shadow: inset 0 3px 0 var(--qx-acc-2); }
+.qx-now-main { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 16px; align-items: center; margin: 12px 0 8px; }
+.qx-now-where { min-width: 0; }
+.qx-now-title { font-size: 18px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qx-now-ping { text-align: right; }
+.qx-now-empty { padding: 16px 0 6px; }
+.qx-now-empty .qx-now-title { white-space: normal; }
+.qx-grade {
+	--qx-g: var(--text-color-medium, #808080);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 60px;
+	height: 60px;
+	border-radius: 50%;
+	font-size: 26px;
+	font-weight: bold;
+	color: var(--qx-g);
+	border: 3px solid var(--qx-g);
+	background: color-mix(in srgb, var(--qx-g) 10%, transparent);
+}
+.qx-grade.good { --qx-g: var(--qx-good); }
+.qx-grade.ok   { --qx-g: var(--qx-ok); }
+.qx-grade.poor { --qx-g: var(--qx-bad); }
+.qx-spark { display: block; width: 100%; height: 40px; overflow: visible; }
+.qx-spark-empty { height: 0; }
+.qx-spark polyline { fill: none; stroke: var(--qx-acc-2); stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.qx-spark polygon { fill: var(--qx-acc-2); fill-opacity: .15; stroke: none; }
+.qx-ctl { display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+.qx-ctl-row { display: flex; align-items: center; gap: 12px; }
+.qx-ctl-txt { flex: 1 1 auto; min-width: 0; }
+.qx-ctl-sub { margin-top: 2px; font-size: 15px; font-weight: bold; overflow-wrap: anywhere; }
+.qx-ctl-stat { margin-top: 2px; font-size: 12px; }
+.qx-ctl-btns { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 12px; border-bottom: 1px solid var(--qx-line); }
+.qx-ctl-btns[hidden] { display: none; }
+.qx-ctl-btns > .qx-mini { margin: 0; padding: 0 10px; min-height: 0; height: 26px; line-height: 24px; font-size: 12px; }
+.qx-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 16px; }
+.qx-tile {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	padding: 12px 14px;
+	border: 1px solid var(--qx-line);
+	border-radius: 8px;
+	background: var(--qx-soft);
+}
+.qx-tile > .qx-big { overflow: hidden; text-overflow: ellipsis; }
+.qx-meter { height: 3px; margin-top: auto; border-radius: 2px; background: var(--qx-line); overflow: hidden; }
+.qx-meter > i { display: block; width: 0; height: 100%; background: var(--qx-acc); transition: width .6s; }
+.qx-meter > i.good { background: var(--qx-good); }
+.qx-meter > i.ok   { background: var(--qx-ok); }
+.qx-meter > i.poor { background: var(--qx-bad); }
+.qx-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 0 16px; }
+.qx-rows > div { padding: 9px 0; min-width: 0; align-self: center; border-top: 1px solid var(--qx-line); }
+.qx-rows > div:nth-child(-n+3) { border-top: 0; }
+.qx-setup ol, .qx-steps { margin: 4px 0 0 1.4em; padding: 0; list-style: decimal; }
+:is(.qx-setup ol, .qx-steps) > li { padding: 3px 0; }
+.qx-setup ol > li.done > a { opacity: .55; text-decoration: line-through; }
+:is(.qx-setup ol, .qx-steps) > li.done::marker { color: var(--qx-good); }
+.qx-alert { box-shadow: inset 3px 0 0 var(--qx-bad); }
+.qx-alert > .qos-ex-card-title::before { background: var(--qx-bad); }
+.qx-warn { margin-top: 8px; font-size: 12.5px; }
+/* Overview 1.3.2.3: gaming traffic tile, Now playing stats, game stream,
+ * gaming queue, health card. */
+.qx-tile.qx-wide { grid-column: span 2; }
+.qx-tile-spark { margin-top: auto; }
+.qx-tile-spark > .qx-spark { height: 36px; }
+.qx-now .qos-ex-chart.qx-chart-mini { display: block; width: 100%; margin-top: 4px; }
+.qx-now .pf2-spark { margin: 4px 0 0; }
+.qx-nowstats { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin-top: 8px; font-size: 12.5px; }
+.qx-nowstats b { font-variant-numeric: tabular-nums; }
+.qx-nowkey { margin-left: auto; display: inline-flex; align-items: center; gap: 4px 6px; font-size: 11px; color: var(--text-color-medium, #808080); }
+.qx-nowkey > i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-left: 6px; }
+.qx-hscroll { overflow-x: auto; }
+.qx-gflow table.qos-ex-conn { table-layout: fixed; width: 100%; min-width: 92ch; margin: 0; }
+.qx-gflow-empty { padding: 8px 0 4px; }
+.qx-q { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.qx-qp { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 14px; border: 1px solid var(--qx-line); border-radius: 8px; background: var(--qx-soft); }
+.qx-qp-title { font-size: 15px; font-weight: bold; }
+.qx-qp > .qx-meter { margin: 6px 0 2px; height: 5px; }
+.qx-qp-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.qx-qp-rows > :nth-child(odd) { color: var(--text-color-medium, #808080); }
+@media (max-width: 800px) {
+	.qx-hero { grid-template-columns: minmax(0, 1fr); }
+	.qx-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.qx-q { grid-template-columns: minmax(0, 1fr); }
+	.qx-nowkey { margin-left: 0; }
+}
+@media (max-width: 600px) {
+	.qx-gflow table.qos-ex-conn { min-width: 0; table-layout: auto; }
+	.qx-gflow table.qos-ex-conn th { width: auto !important; }
+}
+@media (max-width: 600px) {
+	.qx-big { font-size: 22px; }
+	.qx-big.qx-mid { font-size: 16px; }
+	.qx-now-main { grid-template-columns: auto minmax(0, 1fr); }
+	.qx-now-ping { grid-column: 1 / -1; text-align: left; }
+	.qx-rows { grid-template-columns: minmax(0, 1fr) max-content; }
+	.qx-rows > .qx-label { grid-column: 1 / -1; padding-bottom: 0; }
+	.qx-rows > div:not(.qx-label) { border-top: 0; padding-top: 3px; }
+	.qx-rows > .qx-label:not(:first-child) { border-top: 1px solid var(--qx-line); }
+}
+
+/* Ping Filter (1.3.1.7): the setup card, the mode cards, grade pills,
+ * pinned-server buttons on Servers, the Advanced options fold. The first
+ * step to do and the active mode in the accent, done steps green. */
+.qx-pfoff { box-shadow: inset 0 3px 0 var(--qx-acc); }
+.qx-pfoff .qx-steps { margin-top: 12px; }
+.qx-steps > li.cur::marker, .qx-steps > li.cur > .qx-step > b { color: var(--qx-acc); }
+.qx-step { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.qx-steps > li > .pf2-prof { margin-top: 8px; }
+.pf2-prof { display: grid; flex: 1 1 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; overflow: visible; }
+.qx-mode {
+	min-width: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--qx-line);
+	border-radius: 8px;
+	background: var(--qx-soft);
+}
+.qx-mode-hd {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	width: 100%;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.qx-mode-hd > b { font-size: 14px; }
+.qx-mode-hd > span { font-size: 12px; color: var(--text-color-medium, #808080); }
+.qx-mode:hover { border-color: color-mix(in srgb, var(--qx-acc) 55%, transparent); }
+.qx-mode.on { border-color: var(--qx-acc); box-shadow: inset 0 0 0 1px var(--qx-acc); background: color-mix(in srgb, var(--qx-acc) 10%, transparent); }
+.qx-mode.on .qx-mode-hd { cursor: default; }
+.qx-mode.on .qx-mode-hd > b { color: var(--qx-acc); }
+.qx-mode-hd:disabled { opacity: .6; cursor: progress; }
+.qx-mode-hd:focus-visible { outline: 2px solid var(--qx-acc); outline-offset: 2px; }
+.qx-mode-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; font-size: 12px; }
+.qx-mode-ctl > .qx-mini { margin: 0; min-width: 0; height: 26px; line-height: 24px; padding: 0 10px; font-size: 12px; }
+.qx-mode-ctl > .qx-mini.sel { color: var(--qx-acc); box-shadow: inset 0 0 0 1px var(--qx-acc); }
+.qx-mode-num { white-space: nowrap; }
+.qx-mode-num > input { width: 6.5em; min-width: 0; }
+.qx-matchwarn { margin: 6px 0; font-size: 12px; }
+.qx-matchwarn[hidden] { display: none; }
+/* The Map while Ping Filter is off: a cross at the centre, where Pin home
+ * here drops the pin. Under the markers, never in the way of a click. */
+#pf-map.qx-cross::after {
+	content: '';
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	z-index: 450;
+	width: 26px;
+	height: 26px;
+	margin: -13px 0 0 -13px;
+	background: linear-gradient(var(--qx-acc), var(--qx-acc)) center / 2px 100% no-repeat,
+		linear-gradient(var(--qx-acc), var(--qx-acc)) center / 100% 2px no-repeat;
+	pointer-events: none;
+}
+.label.qx-gp { min-width: 1.9em; justify-content: center; font-size: 12px; font-weight: bold; }
+.qx-mode-hd > b, .qx-mode-hd > span { white-space: normal; word-break: normal; overflow-wrap: normal; }
+.pf-rows td.pf-acts { padding-top: 4px; padding-bottom: 4px; }
+.pf-rows td.pf-acts .pf-actbtn { min-width: 0; height: 26px; line-height: 24px; padding: 0 10px; font-size: 12px; }
+.qx-gtxt.good { color: var(--qx-good); }
+.qx-gtxt.ok   { color: var(--qx-ok); }
+.qx-gtxt.poor { color: var(--qx-bad); }
+.pf2-now-score .qx-grade { margin: 0 auto 2px; }
+.qx-pin.sel[data-v="whitelist"] { color: var(--qx-good); box-shadow: inset 0 0 0 1px var(--qx-good); background: color-mix(in srgb, var(--qx-good) 12%, transparent); }
+.qx-pin.sel[data-v="blacklist"] { color: var(--qx-bad); box-shadow: inset 0 0 0 1px var(--qx-bad); background: color-mix(in srgb, var(--qx-bad) 12%, transparent); }
+.qos-ex-dev-bar > .qx-mini { margin: 0; height: 26px; line-height: 24px; padding: 0 10px; font-size: 12px; }
+details.qx-adv { margin-top: 8px; }
+details.qx-adv > summary { font-size: 15px; font-weight: bold; }
+@media (max-width: 600px) { .pf2-prof { grid-template-columns: minmax(0, 1fr); } }
+
+/* System (1.3.2.0): health dots while the shaper is off, log levels. */
+.qos-ex-check.idle .dot { background: color-mix(in srgb, currentColor 30%, transparent); }
+.qx-log-err  { color: var(--qx-bad); font-weight: bold; }
+.qx-log-warn { color: var(--qx-ok); }
+
+/* Live -> Stats (1.3.2.1): the refresh control inside the Download / Upload
+ * tab bar, at its right end; not drawn as a tab in any theme. */
+#view .cbi-tabmenu > li.qx-tabtools,
+#view .cbi-tabmenu > li.qx-tabtools:hover {
+	margin: 0 0 0 auto;
+	padding: 0 4px;
+	height: auto;
+	max-width: none;
+	border: 0;
+	border-radius: 0;
+	background: none;
+	box-shadow: none;
+}
+#view .cbi-tabmenu > li.qx-tabtools > .qos-ex-chart-rate { margin: 0; white-space: nowrap; color: var(--text-color-medium, #808080); font-weight: normal; }
+/* Dashboard: tile links, Now playing row table. */
+.pf-card:has(> .pf-go) { display: flex; flex-direction: column; }
+.pf-card > .pf-go { align-self: flex-start; margin-top: auto; padding-top: 6px; }
+.pf2-now-wrap { overflow-x: auto; margin: 2px 0 10px; }
+
+/* ============================================================================
+ * PREMIUM LAYER (1.3.6.3) -- the gaming-dashboard polish. Layout, data and
+ * the colour meanings are untouched: this only deepens the look. Glass card
+ * backgrounds (a sheen fading from the top over a translucent fill), a glow
+ * on ACTIVE elements on dark themes only (light stays the clean fallback),
+ * monospace numerics, the banner as a status hero, the Overview's rate
+ * gauges and the Stats class cards. Same scoping contract as the rest of
+ * the sheet; every colour still derives from the theme's variables or the
+ * app tokens above. A browser without color-mix keeps today's flat look.
+ * ==========================================================================*/
+:root {
+	--qx-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+	--qx-panel: color-mix(in srgb, currentColor 3%, transparent);
+	--qx-sheen: color-mix(in srgb, #fff 40%, transparent);
+}
+:root[data-qx-dark] {
+	--qx-sheen: color-mix(in srgb, #fff 4%, transparent);
+}
+
+/* Glass panels. The gradient is the sheen, the colour layer the fill; both
+ * mix from currentColor, so they sit right on any theme background. */
+.qos-ex-card,
+.pf2-learn,
+.qos-ex-scope .cbi-map > .cbi-section {
+	background: linear-gradient(180deg, var(--qx-sheen), transparent 2.8em), var(--qx-panel);
+	border-radius: 10px;
+}
+.qx-tile, .qx-qp, .qx-mode, .qos-ex-tile, .pf-card {
+	background: linear-gradient(180deg, var(--qx-sheen), transparent 2.2em), var(--qx-soft);
+	border-radius: 10px;
+}
+.qx-tile, .qx-mode, .qx-cc, .qos-ex-card { transition: border-color .2s, box-shadow .2s; }
+
+/* Monospace numerics on every headline figure (tables already have theirs). */
+.qx-big, .qx-cc-rate, .qos-ex-tile-v, .pf-value { font-family: var(--qx-mono); }
+
+/* The banner as a status hero: a touch taller, rounded, its accent gradient
+ * over the glass fill; pills slightly larger, digits fixed-width, and the
+ * on/off pills carry a real dot (qx-sdot) that can glow. */
+.qos-ex-appbar {
+	padding: 11px 16px;
+	border-radius: 10px;
+	background: linear-gradient(90deg, color-mix(in srgb, var(--qx-acc) 13%, transparent), transparent 62%),
+		linear-gradient(180deg, var(--qx-sheen), transparent 2.8em), var(--qx-panel);
+}
+.qos-ex-appbar .label.pf-pill { font-size: 12px; padding: 3px 11px; line-height: 16px; }
+.qos-ex-appbar .qos-ex-hdr-pills .label { font-variant-numeric: tabular-nums; }
+.qx-sdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+:root[data-qx-dark] .label.pf-pill.on .qx-sdot { box-shadow: 0 0 8px currentColor; }
+
+/* Rate gauges (Overview Download / Upload): a semicircular arc, the rate's
+ * share of the shaped rate, the figure inside the arc. The value path has
+ * pathLength 100, so one dash-offset write moves it; CSS animates the move. */
+.qx-gtile { text-align: center; }
+.qx-gtile .qx-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qx-gauge-wrap { position: relative; width: 100%; max-width: 190px; margin: 2px auto auto; }
+.qx-gauge-wrap > .qx-big { position: absolute; left: 0; right: 0; bottom: 0; font-size: 16px; }
+.qx-gauge { display: block; width: 100%; overflow: visible; }
+.qx-gauge-track { fill: none; stroke: var(--qx-line); stroke-width: 10; stroke-linecap: round; }
+.qx-gauge-arc { fill: none; stroke: var(--qx-acc); stroke-width: 10; stroke-linecap: round; transition: stroke-dashoffset .5s ease; }
+:root[data-qx-dark] .qx-gauge-arc { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--qx-acc) 45%, transparent)); }
+
+/* Stats class cards: the headline strip over the charts. Colour-keyed by the
+ * class (--qx-cc, the chart colour), dimmed when idle or out of focus, edged
+ * red while dropping or holding a backlog. */
+.qx-cls-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; margin: 0 0 12px; }
+.qx-cc {
+	--qx-cc: var(--qx-acc);
+	min-width: 0;
+	padding: 8px 12px 9px;
+	border: 1px solid var(--qx-line);
+	border-top: 3px solid var(--qx-cc);
+	border-radius: 10px;
+	background: linear-gradient(180deg, var(--qx-sheen), transparent 2.2em), var(--qx-soft);
+}
+.qx-cc-rate { font-size: 17px; font-weight: bold; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qx-cc-sub { font-size: 11px; color: var(--text-color-medium, #808080); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qx-cc.idle { opacity: .55; }
+.qx-cc.dim { opacity: .35; }
+.qx-cc.hot { border-color: color-mix(in srgb, var(--qx-bad) 55%, transparent); border-top-color: var(--qx-cc); }
+.qx-cc.hot .qx-cc-sub { color: var(--qx-bad); }
+
+/* The glow set -- dark themes only, active elements only. */
+:root[data-qx-dark] .qx-switch[aria-checked="true"] { box-shadow: 0 0 12px color-mix(in srgb, var(--qx-good) 35%, transparent); }
+:root[data-qx-dark] body.qx-app #tabmenu .tabs > li.active > a,
+:root[data-qx-dark] body.qx-app .cbi-tabmenu > li.cbi-tab > a { text-shadow: 0 0 10px color-mix(in srgb, var(--qx-acc) 50%, transparent); }
+:root[data-qx-dark] .qos-ex-card > .qos-ex-card-title::before,
+:root[data-qx-dark] .qos-ex-scope .cbi-map > .cbi-section > h3::before { box-shadow: 0 0 7px color-mix(in srgb, var(--qx-acc) 55%, transparent); }
+:root[data-qx-dark] .qx-grade { box-shadow: 0 0 14px color-mix(in srgb, var(--qx-g) 28%, transparent); }
+:root[data-qx-dark] .qx-mode.on { box-shadow: inset 0 0 0 1px var(--qx-acc), 0 0 11px color-mix(in srgb, var(--qx-acc) 22%, transparent); }
+
+/* Animations off when the reader asked for that (the pulse above has its own
+ * reduced-motion fallback). */
+@media (prefers-reduced-motion: reduce) {
+	.qx-tile, .qx-mode, .qx-cc, .qos-ex-card, .qx-gauge-arc,
+	.qx-meter > i, .qos-ex-share > i { transition: none !important; }
+}
+
+/* ============================================================================
+ * AUTO SETUP (1.3.7.6) -- its own tab while setup is not done. The choice
+ * cards are the Ping Filter's mode cards, the router and line tiles and
+ * gauges the Overview's, the bufferbloat grade the Now playing grade, the
+ * device table Setup's. Step cards carry their number in the title instead
+ * of the accent bar: the next step in the accent, done steps green.
+ * ==========================================================================*/
+.qx-as-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.qx-as-pick > .qx-mode { padding: 12px 14px; }
+.qx-as-pick > .qx-mode > .qx-mode-hd { gap: 4px; }
+.qx-as-pick .qx-mode-hd > b { font-size: 15px; }
+.qx-as-pick > .qx-mode.qx-as-rec { border-color: var(--qx-acc); box-shadow: inset 0 0 0 1px var(--qx-acc); }
+.qx-as-pick > .qx-mode.qx-as-rec .qx-mode-hd > b { color: var(--qx-acc); }
+.qx-as-tiles { margin: 2px 0 12px; }
+.qos-ex-card > .qx-as-tiles:last-child { margin-bottom: 0; }
+.label.pf-pill.qx-as-tier { --pf-c: var(--qx-acc); font-size: 11px; }
+.qx-as-step.cur { box-shadow: inset 0 3px 0 var(--qx-acc); }
+.qx-as-step > .qos-ex-card-title::before { display: none; }
+/* One step at a time: a step fades in as it appears, and scrolls into view
+ * clear of the theme's fixed header. */
+.qx-as-step { scroll-margin-top: 72px; animation: qx-as-in .35s ease-out; }
+@keyframes qx-as-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .qx-as-step { animation: none; } }
+.qx-as-n {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+	font-size: 12px;
+	font-weight: bold;
+	color: var(--text-color-medium, #808080);
+	box-shadow: inset 0 0 0 1.5px currentColor;
+}
+.qx-as-n.cur { color: var(--qx-acc); }
+.qx-as-n.done { color: #fff; background: var(--qx-good); box-shadow: none; }
+.qx-as-bloat { display: flex; align-items: center; gap: 14px; margin: 6px 0 2px; }
+.qx-as-bloat > .qx-grade { flex: 0 0 auto; width: 52px; height: 52px; font-size: 21px; }
+.qx-as-bloat-t { font-size: 15px; font-weight: bold; font-variant-numeric: tabular-nums; }
+.qx-as-prog { margin: 0 0 12px; font-size: 13px; }
+.qx-as-prog-t { display: flex; justify-content: space-between; gap: 12px; }
+.qx-as-prog > .qx-meter { height: 8px; margin-top: 6px; }
+.qx-as-err { margin: 0 0 10px; }
+.qx-as-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.qx-as-line input[type="number"] { width: 7em; min-width: 0; }
+.qx-as-lead { margin: 0 0 10px; }
+.qx-as-guess { margin: 8px 0 0; font-size: 12.5px; color: var(--qx-acc); }
+.qx-as-grp { margin: 14px 0 2px; }
+.qx-as-grp:first-child { margin-top: 2px; }
+.qx-as-set {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 2px 12px;
+	padding: 8px 6px;
+	border-top: 1px solid var(--qx-line);
+	cursor: pointer;
+}
+.qx-as-sets > .qx-as-set:first-child { border-top: 0; }
+.qx-as-set:hover { background: var(--qx-soft); }
+.qx-as-set.keep { cursor: default; }
+.qx-as-set.keep:hover { background: none; }
+.qx-as-set input[type="checkbox"] { margin: 0; }
+.qx-as-what { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.qx-as-what > .qx-sub { overflow-wrap: anywhere; }
+.qx-as-val { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.qx-as-val > strong { color: var(--qx-acc); }
+details.qx-as-keep { margin-top: 12px; }
+details.qx-as-keep > summary { cursor: pointer; font-weight: bold; }
+.qx-as-steer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
+.qx-as-notes { margin: 12px 0 0 1.2em; padding: 0; font-size: 12.5px; }
+.qx-as-apply, .qx-as-next { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--qx-line); }
+.qx-as-alt { margin: 0 0 16px; font-size: 12.5px; text-align: center; }
+:root[data-qx-dark] .qx-as-n.cur { box-shadow: inset 0 0 0 1.5px currentColor, 0 0 8px color-mix(in srgb, var(--qx-acc) 45%, transparent); }
+:root[data-qx-dark] .qx-as-pick > .qx-mode.qx-as-rec { box-shadow: inset 0 0 0 1px var(--qx-acc), 0 0 11px color-mix(in srgb, var(--qx-acc) 22%, transparent); }
+@media (max-width: 800px) { .qx-as-pick { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+	.qx-as-set { grid-template-columns: auto minmax(0, 1fr); }
+	.qx-as-val { grid-column: 2; text-align: left; white-space: normal; }
+}

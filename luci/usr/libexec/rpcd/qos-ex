@@ -1,0 +1,1140 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# rpcd shim for the qos-ex LuCI app (source: luci/usr/libexec/rpcd/qos-ex).
+# rpcd loads us, calls 'list' once at startup, then calls us again with the
+# method name as $2 and the request JSON on stdin.
+#
+# Error convention: every failure path prints a JSON object and exits 0.
+# A non-zero exit is what rpcd surfaces to the caller, and every view wraps
+# its RPC in .catch() with a default value -- so exiting 1 threw the reason
+# away and left the operator staring at a blank panel. The object is the
+# error channel; the exit status is not.
+
+# The backend has exactly ONE installed location; a copy in /root is never
+# run. A missing binary fails loudly at the first call.
+#
+# The execute bit is set by the installer, not here. Self-healing it on every
+# call put a root-side chmod in the hot path and let any holder of the read
+# ACL restore a bit an admin had deliberately cleared.
+QOS_EX_BIN="/usr/sbin/qos-ex.sh"
+
+# UCI package.
+UCI_PKG="qos-ex"
+
+# PingFilter 2.0: the filter has its own backend. Prefer it; fall back to
+# the old in-shaper dispatcher for pre-2.0 installs. Resolved on EVERY
+# rpcd call (cheap -x test) so installing/removing the PF backend needs no
+# rpcd restart. $PFCMD is expanded UNQUOTED at every call site on purpose so
+# the two-word fallback splits into command + verb. $QOS_EX_BIN is always
+# quoted; if you see a bare $PFCMD it is deliberate, a bare $QOS_EX_BIN is a bug.
+PFCMD="/usr/sbin/qos-ex-pf.sh"
+[ -x "$PFCMD" ] || PFCMD="$QOS_EX_BIN pingfilter"
+
+# Request parsing. jshn parses the body once into shell variables; through
+# 1.0.2.2 every field cost its own jsonfilter exec -- four of them in
+# pf_set_home -- and the body was read even for the nine methods that take no
+# parameters at all. Sourced lazily, by read_params, for the same reason.
+read_params() {
+	. /usr/share/libubox/jshn.sh
+	json_load "$(cat)" 2>/dev/null || json_init
+}
+
+# Numeric string validator for coordinates: optional leading '-', digits,
+# at most one decimal point, no leading or trailing point. The old
+# validate_geo matched any mix of digits, dots and dashes, so "1-2-3", "..."
+# and "5-" were all written straight to UCI.
+valid_num() {
+	case "$1" in
+		''|-) return 1 ;;
+		-*)   set -- "${1#-}" ;;
+	esac
+	case "$1" in
+		*[!0-9.]*|*.*.*|.*|*.) return 1 ;;
+	esac
+	return 0
+}
+
+# Bound a validated number by its integer part. Coarse by one unit at the
+# boundary (90.5 passes a max of 90), which is fine -- the point is to reject
+# 999999, not to police the last decimal place.
+in_range() {
+	_ir="${1#-}"; _ir="${_ir%%.*}"
+	[ -n "$_ir" ] || return 1
+	[ "$_ir" -le "$2" ] 2>/dev/null || return 1
+	return 0
+}
+
+json_err() { printf '{"error":"%s"}\n' "$1"; exit 0; }
+
+# After the whole config was replaced (reset, import): enable or disable,
+# whichever settings.enabled now says. A plain restart flipped shaping on or
+# off without its side effects (autostart, flow offload).
+apply_master() {
+	if [ "$(uci -q get "$UCI_PKG.settings.enabled")" = 1 ]; then
+		run_bounded "$QOS_EX_BIN" enable
+	else
+		run_bounded "$QOS_EX_BIN" disable
+	fi
+}
+
+# Run a lifecycle command ($@) but wait for it no longer than rpcd will wait
+# for us. rpcd SIGKILLs this shim at its exec timeout (rpcd.@rpcd[0].timeout,
+# 30 s by default) and LuCI then reports a failure for a start that was still
+# going -- it waits up to 30 s on the shaper's lock first. The command runs as
+# a background job with every fd off rpcd's pipe, so it finishes either way.
+# Sets rc (its exit status) and pend (1 = still running when we stopped
+# waiting; rc is then 0 and the view polls state for the outcome).
+run_bounded() {
+	_to=$(uci -q get "rpcd.@rpcd[0].timeout")
+	case "$_to" in ''|*[!0-9]*) _to=30 ;; esac
+	_to=$((_to - 5)); [ "$_to" -ge 5 ] || _to=5
+	_rf=/var/run/qos-ex-act.$$
+	# No marker file (no /var/run): run it as before, waiting for it.
+	# `true`, not `:`: a failed redirection on a special builtin ends the shim.
+	if ! { true > "$_rf.w"; } 2>/dev/null; then
+		"$@" >/dev/null 2>&1; rc=$?; pend=0
+		return 0
+	fi
+	( "$@" >/dev/null 2>&1; _x=$?; [ -f "$_rf.w" ] && echo "$_x" > "$_rf" ) </dev/null >/dev/null 2>&1 &
+	_n=0
+	while [ "$_n" -lt "$_to" ] && [ ! -s "$_rf" ]; do sleep 1; _n=$((_n + 1)); done
+	rm -f "$_rf.w"
+	rc=0; pend=1
+	if [ -s "$_rf" ]; then read -r rc < "$_rf"; pend=0; fi
+	case "$rc" in ''|*[!0-9]*) rc=1 ;; esac
+	rm -f "$_rf"
+}
+
+# GitHub, for update_check / update_run: the Contents API raw type, as
+# QoS-Ex-install.sh uses it (serves a private repo with a token; not CDN-cached
+# after a push). Same order as QoS-Ex-install.sh: private (the token it saved,
+# when there is one), then public.
+# uclient-fetch is OpenWrt's default and has --header since 24.10; curl
+# when wget is missing or fails. $1 path, $2 auth header; body on stdout.
+# GH_ERR = the downloader's last line on failure ("HTTP error 404", ...).
+GH_TOKEN_FILE="/etc/qos-ex/gh-token"
+GH_ERR=""
+gh_get() {
+	_u="https://api.github.com/repos/choppyc79/QoS-Ex/contents/$1?ref=$(upd_ref)"
+	_a="Accept: application/vnd.github.raw"; _ge="/var/run/qos-ex-gh.err.$$"; _gr=1
+	if command -v wget >/dev/null 2>&1; then
+		wget -T 15 -O - --header="$2" --header="$_a" "$_u" 2>"$_ge"; _gr=$?
+	fi
+	if [ "$_gr" != 0 ] && command -v curl >/dev/null 2>&1; then
+		curl -fsSL --connect-timeout 8 --max-time 60 -H "$2" -H "$_a" "$_u" 2>"$_ge"; _gr=$?
+	fi
+	GH_ERR=""; [ "$_gr" = 0 ] || GH_ERR=$(tail -n 1 "$_ge" 2>/dev/null | tr -d '\r"\\')
+	rm -f "$_ge" 2>/dev/null
+	return "$_gr"
+}
+gh_auth() { _t=""; [ -r "$GH_TOKEN_FILE" ] && read -r _t < "$GH_TOKEN_FILE"; [ -n "$_t" ] && echo "Authorization: Bearer $_t"; }
+# A line in the QoS-Ex log (the Logs page) and syslog. $1 INFO / "ERR ".
+upd_log() {
+	echo "$(date '+%Y-%m-%d %H:%M:%S') [$1] update: $2" 2>/dev/null >> /var/log/qos-ex.log
+	logger -t QoS-Ex "update: $2" 2>/dev/null
+	return 0
+}
+# An update that could not even start: logged, left in the update log for
+# the Maintenance tab (ending @@RC=1 like a failed run), and returned.
+upd_fail() {
+	upd_log "ERR " "FAILED - $1"
+	printf '%s\nqos-ex: update did not start: %s\n@@RC=1\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" > /var/log/qos-ex-update.log 2>/dev/null
+	json_err "$1"
+}
+# VERSION= of an installed script (first 40 lines), empty if absent.
+hver() { head -n 40 "$1" 2>/dev/null | sed -n 's/^VERSION="\([0-9][0-9.]*\)".*/\1/p' | head -n 1; }
+# Automatic checks (qos-ex.settings.update_check, default on). Off stops the
+# views' own calls reaching GitHub; Check now (force) still works.
+upd_auto() { case "$(uci -q get "$UCI_PKG".settings.update_check)" in 0|no|off|false) return 1 ;; esac; return 0; }
+# The branch updates come from (qos-ex.settings.update_branch): main
+# (releases) or dev (testing). Unset (Reset to defaults, a settings file
+# without it) = the branch installed, so a router stays on its branch.
+# Nothing else reaches a URL.
+upd_ref() {
+	case "$(uci -q get "$UCI_PKG".settings.update_branch)" in
+		dev) echo dev ;; main) echo main ;; *) upd_iref ;;
+	esac
+}
+# The branch the last update installed (QoS-Ex-install.sh writes it); main
+# before the first one.
+upd_iref() {
+	_r=""; [ -r /etc/qos-ex/installed-ref ] && read -r _r < /etc/qos-ex/installed-ref
+	case "$_r" in dev) echo dev ;; *) echo main ;; esac
+}
+# An update is running: the Maintenance job (its pidfile names a live
+# process that is the job: the pidfile outlives a killed one, and its PID
+# can be reused) or QoS-Ex-install.sh from SSH (it holds the lock).
+upd_busy() {
+	_op=""; [ -s /var/run/qos-ex-update.pid ] && read -r _op < /var/run/qos-ex-update.pid
+	case "$_op" in ''|*[!0-9]*) ;; *) grep -q qos-ex-update "/proc/$_op/cmdline" 2>/dev/null && return 0 ;; esac
+	command -v flock >/dev/null 2>&1 && ! flock -n /var/run/qos-ex-update.lock true 2>/dev/null
+}
+
+# Emit a JSON array of {ip,country,city,ping,lat,lon,ts} for a
+# whitespace-separated IP list ($1), joined against servers.tsv ($2).
+# Single-sourced: whitelist and blacklist used to carry byte-identical
+# copies of this program. Missing/absent TSV rows yield blank geo.
+pf_list_json() {
+	echo "$1" | awk -v tsv="$2" '
+	# Escapes by concatenation, never a gsub replacement (BusyBox 1.38 awk).
+	function jesc(s,    o, i, c) {
+		o = ""
+		while ((i = match(s, /[\\"]/)) > 0) {
+			c = substr(s, i, 1)
+			o = o substr(s, 1, i - 1) "\\" c
+			s = substr(s, i + 1)
+		}
+		return o s
+	}
+BEGIN {
+		if (tsv != "") while ((getline ln < tsv) > 0) {
+			n = split(ln, F, "\t")
+			if (n >= 12) { CACHE[F[1]] = ln }
+		}
+		printf "["
+		first = 1
+	}
+	{
+		for (i = 1; i <= NF; i++) {
+			ip = $i
+			# Spliced into the JSON unescaped, so only IP characters pass:
+			# one hand-edited entry with a quote in it blanked the whole tab.
+			if (ip == "" || ip ~ /[^0-9A-Fa-f.:\/]/) continue
+			if (!first) printf ","
+			first = 0
+			# Look up cached row by IP. lat/lon stay STRINGS: forcing them
+			# numeric put them through CONVFMT (%.6g) on output, which
+			# truncated 51.5074123 to 51.5074 -- about 10m of error on the
+			# Map tab.
+			country = ""; city = ""; ping = -1; lat = "0"; lon = "0"; ts = 0
+			if (ip in CACHE) {
+				split(CACHE[ip], F, "\t")
+				# servers.tsv is 12 columns:
+				#   1 ip  2 state  3 ping  4 ping_src  5 lat  6 lon
+				#   7 country  8 city  9 ts  10 lan  11 jit  12 loss
+				# Old 8-column rows are rejected by the guard above
+				# rather than misread into the wrong fields.
+				ping    = F[3] + 0
+				if (F[5] ~ /^-?[0-9]+(\.[0-9]+)?$/) lat = F[5]
+				if (F[6] ~ /^-?[0-9]+(\.[0-9]+)?$/) lon = F[6]
+				country = F[7]
+				city    = F[8]
+				ts      = F[9] + 0
+			}
+			gsub(/[\001-\037]/, "", country); gsub(/[\001-\037]/, "", city)
+			printf "{\"ip\":\"%s\",\"country\":\"%s\",\"city\":\"%s\",\"ping\":%d,\"lat\":%s,\"lon\":%s,\"ts\":%d}",
+				ip, jesc(country), jesc(city), ping, lat, lon, ts
+		}
+	}
+	END { printf "]" }'
+}
+
+# Wrap a command's stdout+stderr into a JSON {"output": "..."} response.
+# Streamed straight into awk rather than captured into a variable first:
+# the old form held an unbounded logdump twice over on a 128MB MT7621, and
+# past ubus's message ceiling the whole call fails and the panel goes blank
+# with no reason shown. Bounded here instead, visibly.
+# The settings file (QoS-Ex Settings.cfg): three header lines, then
+# /etc/config/qos-ex.
+#   # QoS-Ex settings
+#   # shaper=<version> hw=<Auto Setup fingerprint> date=<YYYY-MM-DD>
+#   # sha256=<sha256 of the settings below>
+# The hash is of the settings with trailing newlines dropped, plus one.
+CFG_MARK="# QoS-Ex settings"
+cfg_sum() { printf '%s\n' "$1" | sha256sum | cut -d' ' -f1; }
+cfg_pack() {
+	local _b _v
+	_b=$(cat /etc/config/"$UCI_PKG") || return 1
+	_v=$(sed -n '/^VERSION="/{s/^VERSION="\([^"]*\)".*/\1/p;q;}' "$QOS_EX_BIN" 2>/dev/null)
+	printf '%s\n# shaper=%s hw=%s date=%s\n# sha256=%s\n%s\n' "$CFG_MARK" "${_v:-?}" \
+		"$(uci -q get "$UCI_PKG".autosetup.hw)" "$(date +%Y-%m-%d)" "$(cfg_sum "$_b")" "$_b"
+}
+# Section types a settings file may hold (htb: an old one, migrate drops it).
+CFG_TYPES=" global ips ports cake hfsc htb simple advanced adaptive pingfilter autosetup "
+
+emit_text() {
+	printf '{"output":"'
+	"$@" 2>&1 | awk '
+	# Escapes are built by concatenation, never a gsub replacement string:
+	# BusyBox 1.38 awk drops the backslash of "\\t" there, so every tab
+	# reached the browser as a literal t (Flows: No flows match).
+	function jesc(s,    o, i, c) {
+		o = ""
+		while ((i = match(s, /[\\"\t]/)) > 0) {
+			c = substr(s, i, 1)
+			o = o substr(s, 1, i - 1) (c == "\t" ? "\\t" : "\\" c)
+			s = substr(s, i + 1)
+		}
+		return o s
+	}
+	BEGIN { first = 1; maxln = 2000 }
+	NR <= maxln {
+		if (!first) printf "\\n"; first = 0
+		s = substr($0, 1, 4096)
+		gsub(/[\001-\010\012-\037]/, "", s)   # C0 controls except tab (incl CR) -- keep JSON valid
+		printf "%s", jesc(s)
+	}
+	END { if (NR > maxln) printf "\\n... [%d more lines truncated]", NR - maxln }'
+	printf '"}\n'
+}
+
+# The speed test's state file, then now=<uptime, s>: its at= is the uptime
+# when it was written, so the page can tell a result under an hour old (the
+# one suggest takes) from an older one.
+as_result() {
+	cat /var/run/qos-ex-autosetup
+	_u=0; read -r _u _ < /proc/uptime
+	echo "now=${_u%.*}"
+}
+
+# Per-qdisc / per-class detail straight from `tc -s -j` (the live method):
+# CAKE per-tin delays, flows and marks; HFSC/HTB as plain tc -s text (see
+# live). Read-only, no backend fork.
+# The @@COUNTERS@@ block for `counters` and `live`: the live library the
+# install sliced from the backend (lib live.sh) with the values the start
+# stamp recorded, so a poll parses no 200 KB script. The backend answers as
+# before when the stamp or the library is missing (an older backend, or the
+# shaper is off).
+emit_counters() {
+	_st=/var/run/qos-ex-started; _ll=/usr/lib/qos-ex/live.sh
+	if [ -s "$_st" ] && [ -f "$_ll" ] && grep -q '^QDISC=' "$_st"; then
+		# The sliced block reads the variables set here.
+		# shellcheck disable=SC2034
+		(
+			QDISC=""; CAKE_PRIO=""; WAN=""; IFB=""; DL_ON=wan; UPLOAD_KBPS=0; DOWNLOAD_KBPS=0; SHAPE_UP=1
+			while IFS='=' read -r _k _v; do
+				case "$_v" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+				case "$_k" in
+					QDISC) QDISC=$_v ;; PRIO) CAKE_PRIO=$_v ;; WAN) WAN=$_v ;; IFB) IFB=$_v ;;
+					DLON) DL_ON=$_v ;; UL) UPLOAD_KBPS=$_v ;; DL) DOWNLOAD_KBPS=$_v ;; UP) SHAPE_UP=$_v ;;
+				esac
+			done < "$_st"
+			case "$QDISC" in cake|hfsc|htb) ;; *) exit 1 ;; esac
+			[ -n "$WAN" ] && [ -n "$IFB" ] || exit 1
+			# shellcheck disable=SC1090 # the sliced block, written by install
+			. "$_ll" 2>/dev/null || exit 1
+			stats_counters
+		) && return 0
+	fi
+	"$QOS_EX_BIN" counters
+}
+
+emit_tc() {
+	_w=$(sed -n 's/^WAN=//p' /var/run/qos-ex-started 2>/dev/null)
+	_i=$(sed -n 's/^IFB=//p' /var/run/qos-ex-started 2>/dev/null)
+	[ -n "$_w" ] || _w=$(uci -q get "$UCI_PKG".settings.wan 2>/dev/null)
+	[ -n "$_i" ] || _i="ifb-$_w"
+	case "$_w$_i" in ''|*[!A-Za-z0-9._@-]*) printf '{"error":"bad interface name"}'; return 1 ;; esac
+	tcj() {
+		_o=$(tc -s -j "$1" show dev "$2" 2>/dev/null)
+		case "$_o" in '['*) jsonfilter -s "$_o" -e '@' >/dev/null 2>&1 && { printf '%s' "$_o"; return; } ;; esac
+		printf '[]'
+	}
+	tcdev() {
+		_q=$(tcj qdisc "$1")
+		case "$_q" in *'"kind":"cake"'*) printf '{"qdisc":%s,"text":""}' "$_q"; return ;; esac
+		printf '{"qdisc":[],"text":'
+		{ tc -s qdisc show dev "$1"; tc -s class show dev "$1"; } 2>/dev/null | awk '
+			function jesc(s,    o, i, c) {
+				o = ""
+				while ((i = match(s, /[\\"\t]/)) > 0) {
+					c = substr(s, i, 1)
+					o = o substr(s, 1, i - 1) (c == "\t" ? "\\t" : "\\" c)
+					s = substr(s, i + 1)
+				}
+				return o s
+			}
+			BEGIN { printf "\"" }
+			NR <= 2000 { s = substr($0, 1, 1024)
+				gsub(/\t/, " ", s); gsub(/[\001-\037]/, "", s); printf "%s\\n", jesc(s) }
+			END { printf "\"" }'
+		printf '}'
+	}
+	printf '{"wan":"%s","ifb":"%s","egress":%s,"ingress":%s}' "$_w" "$_i" "$(tcdev "$_w")" "$(tcdev "$_i")"
+}
+
+case "$1" in
+	list)
+		cat <<EOL
+{
+	"status":       {},
+	"state":        {},
+	"stats":        {},
+	"counters":     {},
+	"live":         {},
+	"nfterr":       {},
+	"logdump":      { "lines": 0, "src": "" },
+	"debug":        {},
+	"ruleset":      {},
+	"conntrack":    { "max": 0 },
+	"action":       { "verb": "" },
+	"pf_status":    {},
+	"pf_servers":   {},
+	"pf_telemetry": { "ip": "" },
+	"pf_action":    { "verb": "", "ip": "", "ms": 0 },
+	"pf_text":      { "verb": "", "ip": "" },
+	"pf_run":       { "verb": "", "ip": "" },
+	"pf_set_home":  { "lat": "", "lon": "", "radius_km": 0, "mode": "" },
+	"pf_lists":     {},
+	"pf_sessions":  {},
+	"cfg_export":   {},
+	"cfg_import":   { "data": "" },
+	"update_check": { "force": false, "inst": false },
+	"update_cfg":   { "on": false },
+	"update_branch": { "branch": "" },
+	"update_run":   {},
+	"update_log":   {},
+	"uninstall_run": {},
+	"autosetup":    { "verb": "" },
+	"autosetup_run": { "verb": "", "keys": "", "down": "", "up": "" }
+}
+EOL
+		;;
+	call)
+		method="$2"
+		# The daemon's servers.json is up to an idle tick (30 s) old. Drop it
+		# when a method that changes Ping Filter ends, so the page's next
+		# fetch is built new and the Map and Servers pages both show
+		# the change.
+		case "$method" in
+			pf_action|pf_run|pf_set_home|cfg_import) trap 'rm -f /var/run/qos-ex-pingfilter/servers.json /var/run/qos-ex-state.cache 2>/dev/null' EXIT ;;
+			action) trap 'rm -f /var/run/qos-ex-state.cache 2>/dev/null' EXIT ;;
+		esac
+		case "$method" in
+			status)     emit_text "$QOS_EX_BIN" status ;;
+			# One `state` answer serves every open QoS-Ex tab for 3 s: each
+			# tab polls it every 5 s, and on a small router a run of the
+			# backend is a noticeable fork. The cache carries the config's
+			# mtime, so a commit (Save & Apply, uci over SSH) is seen at once;
+			# an action drops it (trap above). Written under a per-PID name,
+			# then renamed: a reader never sees half a reply.
+			state)
+				_sc=/var/run/qos-ex-state.cache
+				_now=$(date +%s)
+				_cm=$(date -r /etc/config/"$UCI_PKG" +%s 2>/dev/null || echo 0)
+				_t=0; _m=x
+				[ -s "$_sc" ] && read -r _t _m < "$_sc"
+				if [ "$_m" = "$_cm" ] && [ $((_now - _t)) -ge 0 ] && [ $((_now - _t)) -lt 3 ]; then
+					sed 1d "$_sc"
+				else
+					_out=$(emit_text "$QOS_EX_BIN" state)
+					printf '%s\n' "$_out"
+					{ printf '%s %s\n' "$_now" "$_cm"; printf '%s\n' "$_out"; } > "$_sc.$$" 2>/dev/null &&
+						mv -f "$_sc.$$" "$_sc" 2>/dev/null || rm -f "$_sc.$$" 2>/dev/null
+				fi
+				;;
+			stats)      emit_text "$QOS_EX_BIN" stats ;;
+			# The counters alone (LuCI's Status tile, the Stats page's first
+			# load): live's block without the tc detail.
+			counters)   emit_text emit_counters ;;
+			# Stats and the Overview poll counters and the queue detail
+			# together: one call, one rpcd exec, instead of two every refresh.
+			# The detail comes straight from `tc -s -j` (emit_tc): CAKE
+			# per-tin delays, flows and marks, HFSC/HTB class and leaf-qdisc
+			# counters. Read-only, no backend fork. Devices come from what
+			# start() recorded, else settings.wan. CAKE answers tc -j (only if
+			# it parses -- one bad byte makes rpcd drop the whole reply).
+			# HFSC/HTB answer plain tc -s text: iproute2's HFSC printer leaks
+			# text into -j output (6.18: "options": {default 13 },
+			# "leaf":"0x80bf"ls d 25ms) and never puts its curves or xstats in
+			# JSON at all, so the view parses the text instead.
+			live)
+				printf '{"counters":'
+				emit_text emit_counters
+				printf ',"tc":'
+				emit_tc
+				echo '}'
+				;;
+			# nfterr and logdump are plain reads of the backend's two files.
+			# Going through qos-ex.sh parsed a 240KB script to run one cat --
+			# every poll tick, for logdump.
+			nfterr)
+				if [ -f /var/run/qos-ex-nft.err ]; then emit_text cat /var/run/qos-ex-nft.err
+				else emit_text echo "(no recent NFT load error)"; fi
+				;;
+			logdump)
+				# Tail here, not in the browser: System > Logs shows the last
+				# few lines and used to be sent the entire log on every poll
+				# tick to do it. 0/absent = the last 2000 (through
+				# 1.2.0.9 that case ran cat, and emit_text kept the FIRST 2000).
+				# src picks the file from a fixed set, never a caller path:
+				# "pf" = the PF log (daemon + actions), "update" = the last
+				# update's output (without its @@RC= end marker), anything
+				# else = the shaper log.
+				read_params
+				json_get_var lines lines 2>/dev/null
+				json_get_var src src 2>/dev/null
+				case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
+				{ [ "$lines" -ge 1 ] && [ "$lines" -le 2000 ]; } 2>/dev/null || lines=2000
+				case "$src" in
+					pf)     _lf=/var/log/qos-ex-pf-daemon.log ;;
+					update) _lf=/var/log/qos-ex-update.log ;;
+					*)      _lf=/var/log/qos-ex.log ;;
+				esac
+				if [ ! -s "$_lf" ]; then
+					emit_text echo "(log empty)"
+				elif [ "$src" = update ]; then
+					emit_text sh -c 'tail -n "$1" "$2" | sed "/^@@RC=/d"' qos-ex-log "$lines" "$_lf"
+				else
+					emit_text tail -n "$lines" "$_lf"
+				fi
+				;;
+			debug)      emit_text "$QOS_EX_BIN" debug ;;
+			ruleset)
+				# Live dump of the ACTIVE QoS table (all chains/sets/counters).
+				# Mode resolved per call, so a Classifier change (Setup >
+				# Rules) is reflected on the next poll without any rpcd
+				# restart. Keep these arms in step with the backend's table
+				# names (NFT_SIMPLE / NFT_ADVANCED / NFT_ADAPTIVE) and with
+				# h.nftTable() in _helpers.js; an unknown mode dumps
+				# qos_ex_adaptive.
+				mode=$(uci -q get "$UCI_PKG".settings.nft_mode 2>/dev/null)
+				case "$mode" in
+					simple)   _t="qos_ex_simple"   ;;
+					advanced) _t="qos_ex_advanced" ;;
+					*)        _t="qos_ex_adaptive" ;;
+				esac
+				emit_text /usr/sbin/nft list table inet "$_t"
+				;;
+			conntrack)
+				read_params
+				json_get_var max max 2>/dev/null
+				case "$max" in ''|*[!0-9]*) max=200 ;; esac
+				# Clamp, don't just validate: max=99999999 was accepted and
+				# handed to the backend, which then tried to render the whole
+				# table through a shell pipeline.
+				[ "$max" -le 5000 ] 2>/dev/null || max=5000
+				[ "$max" -ge 1 ]    2>/dev/null || max=200
+				emit_text "$QOS_EX_BIN" conntrack "$max"
+				;;
+			action)
+				read_params
+				json_get_var verb verb 2>/dev/null
+				case "$verb" in
+					start|stop|restart|reload|enable|disable|enable_autostart|disable_autostart) ;;
+					reset_defaults|clear_log|disable_offload) ;;
+					*) json_err "bad verb" ;;
+				esac
+				rc=0; pend=0
+				case "$verb" in
+					reset_defaults)
+						# Back up before destroying: through 1.0.2.2 this
+						# removed the config and then discarded install_uci's
+						# exit status, so a failed recreate left no config at
+						# all and still reported ok:true off the restart.
+						# Staged under a mktemp name and renamed onto the fixed
+						# one: rename(2) replaces a symlink planted at
+						# /tmp/qos-ex.bak, where cp followed it and wrote the
+						# config through it as root. A failed copy used to be
+						# ignored and the config deleted anyway.
+						_bak="/tmp/$UCI_PKG.bak"; _hb=0
+						if [ -f /etc/config/"$UCI_PKG" ]; then
+							_tmp=$(mktemp "/tmp/$UCI_PKG.XXXXXX" 2>/dev/null) || json_err "backup failed"
+							if cp /etc/config/"$UCI_PKG" "$_tmp" 2>/dev/null && mv -f "$_tmp" "$_bak" 2>/dev/null; then
+								_hb=1
+								# and one that survives a reboot
+								mkdir -p /etc/qos-ex 2>/dev/null
+								cp "$_bak" /etc/qos-ex/config.bak 2>/dev/null
+							else
+								rm -f "$_tmp"; json_err "backup failed"
+							fi
+						fi
+						# Changes staged with the uci CLI were made against the
+						# old file: the next commit would lay them on the new one.
+						uci -q revert "$UCI_PKG" 2>/dev/null
+						rm -f /etc/config/"$UCI_PKG"
+						"$QOS_EX_BIN" install_uci >/dev/null 2>&1 || rc=$?
+						if [ "$rc" -ne 0 ]; then
+							[ "$_hb" = 1 ] && cp "$_bak" /etc/config/"$UCI_PKG" 2>/dev/null
+						else
+							# The settings Auto Setup picks are left blank
+							# until it runs, or Manual setup takes the
+							# defaults.
+							"$QOS_EX_BIN" autosetup blank >/dev/null 2>&1
+							# The fresh config is off: the master verb, not
+							# a restart, so autostart and flow offload follow
+							# settings.enabled (see apply_master).
+							apply_master
+						fi
+						;;
+					clear_log)
+						# Everything System > Logs shows. The PF daemon log is
+						# truncated in place (the daemon holds it open for append).
+						: > /var/log/qos-ex.log 2>/dev/null
+						[ -f /var/log/qos-ex-pf-daemon.log ] && : > /var/log/qos-ex-pf-daemon.log 2>/dev/null
+						rm -f /var/run/qos-ex-nft.err /var/run/qos-ex-pingfilter-nft.err 2>/dev/null
+						# The update log, unless an update is writing it (its
+						# end marker is what Maintenance waits for).
+						if ! command -v flock >/dev/null 2>&1 || flock -n /var/run/qos-ex-update.lock true 2>/dev/null; then
+							rm -f /var/log/qos-ex-update.log /tmp/qos-ex-update.log 2>/dev/null
+						fi
+						;;
+					# clear_log above is the only verb that never waits.
+					start|stop|restart|reload|enable|disable|disable_offload)
+						run_bounded "$QOS_EX_BIN" "$verb"
+						;;
+					*)
+						"$QOS_EX_BIN" "$verb" >/dev/null 2>&1 || rc=$?
+						;;
+				esac
+				printf '{"ok":%s,"rc":%s,"pending":%s}\n' "$( [ $rc -eq 0 ] && echo true || echo false )" "$rc" "$( [ "$pend" = 1 ] && echo true || echo false )"
+				;;
+			# Latest versions on the update branch (System > Maintenance, the
+			# Overview, the update banner on the other QoS-Ex pages, the
+			# Status-page tile), read from the release manifest's "#v" line
+			# (below). Kept in tmpfs for 1 h (5 min after a failure); force
+			# (Check now) refetches, at most once a minute.
+			update_check)
+				read_params
+				json_get_var force force 2>/dev/null
+				json_get_var inst inst 2>/dev/null
+				_c=/var/run/qos-ex-update.json; _now=$(date +%s); _ex=""; _go=1
+				# inst: add the installed shaper / PF versions ("i_shaper", "i_pf")
+				# for views that have no status of their own (the update banner,
+				# the Status-page tile).
+				[ "$force" = 1 ] || upd_auto || { _ex='"off":true,'; _go=0; }
+				[ "$inst" = 1 ] && _ex="$_ex\"i_shaper\":\"$(hver "$QOS_EX_BIN")\",\"i_pf\":\"$(hver /usr/sbin/qos-ex-pf.sh)\","
+				# The branch asked and the one installed; a check of another
+				# branch is not this one's.
+				_br=$(upd_ref)
+				_ex="$_ex\"branch\":\"$_br\",\"installed\":\"$(upd_iref)\","
+				[ -s "$_c" ] && [ "$(jsonfilter -i "$_c" -e '@.ref' 2>/dev/null)" != "$_br" ] && rm -f "$_c"
+				_ct=$(jsonfilter -i "$_c" -e '@.checked' 2>/dev/null)
+				case "$_ct" in ''|*[!0-9]*) _ct=0 ;; esac
+				_ttl=3600
+				[ -n "$(jsonfilter -i "$_c" -e '@.error' 2>/dev/null)" ] && _ttl=300
+				[ "$force" = 1 ] && _ttl=60
+				[ -s "$_c" ] && [ $((_now - _ct)) -lt "$_ttl" ] && _go=0
+				if [ "$_go" = 1 ]; then
+				# The release manifest (SHA256SUMS) carries the three versions
+				# on its "#v" line: one small file, not the head of three
+				# large ones. The saved token first, then anonymous.
+				# (to a file, not $(...): GH_ERR must survive the call.)
+				_m=""; _ce="token: none saved"; _mf="$_c.m.$$"
+				if _au=$(gh_auth); then
+					gh_get SHA256SUMS "$_au" > "$_mf"; _m=$(cat "$_mf" 2>/dev/null)
+					_ce="token: ${GH_ERR:-bad reply}"
+				fi
+				case "$_m" in *'#v '*) ;; *)
+					gh_get SHA256SUMS "X-QoS-Ex: anon" > "$_mf"; _m=$(cat "$_mf" 2>/dev/null)
+					_ce="$_ce; public: ${GH_ERR:-bad reply}" ;;
+				esac
+				rm -f "$_mf" 2>/dev/null
+				_v=$(printf '%s\n' "$_m" | sed -n 's/^#v //p' | head -n 1)
+				_s=$(printf '%s' "$_v" | sed -n 's/.*shaper=\([0-9][0-9.]*\).*/\1/p')
+				_p=$(printf '%s' "$_v" | sed -n 's/.*pf=\([0-9][0-9.]*\).*/\1/p')
+				_l=$(printf '%s' "$_v" | sed -n 's/.*luci=\([0-9][0-9.]*\).*/\1/p')
+				_e=""
+				if [ -z "$_s$_p$_l" ]; then
+					_e="GitHub not reachable ($_ce): no network or HTTPS (ca-bundle + libustream), or a private repo without a valid /etc/qos-ex/gh-token"
+					upd_log "ERR " "check FAILED - $_e"
+				fi
+				printf '{"checked":%s,"ref":"%s","shaper":"%s","pf":"%s","luci":"%s","error":"%s"}\n' \
+					"$_now" "$_br" "$_s" "$_p" "$_l" "$_e" > "$_c.$$" && mv -f "$_c.$$" "$_c"
+				fi
+				# Reply = extra keys + the cache object (last result, even when off).
+				_j='{}'; [ -s "$_c" ] && read -r _j < "$_c"
+				_j=${_j#\{}; [ "$_j" = "}" ] && _ex=${_ex%,}
+				printf '{%s%s\n' "$_ex" "$_j"
+				;;
+			# Turn automatic checks on/off. Direct uci commit, no reload_config:
+			# the shaper ignores this key and must not restart for it.
+			update_cfg)
+				read_params
+				json_get_var on on 2>/dev/null
+				case "$on" in 1|true) on=1 ;; *) on=0 ;; esac
+				uci -q set "$UCI_PKG".settings.update_check="$on" && uci -q commit "$UCI_PKG" \
+					|| json_err "could not save the setting"
+				printf '{"ok":true,"on":%s}\n' "$( [ "$on" = 1 ] && echo true || echo false)"
+				;;
+			# The update branch, main or dev. Direct uci commit like update_cfg;
+			# the cached check was of the old branch, so it goes.
+			update_branch)
+				read_params
+				json_get_var br branch 2>/dev/null
+				case "$br" in main|dev) ;; *) json_err "the branch must be main or dev" ;; esac
+				uci -q set "$UCI_PKG".settings.update_branch="$br" && uci -q commit "$UCI_PKG" \
+					|| json_err "could not save the setting"
+				rm -f /var/run/qos-ex-update.json
+				printf '{"ok":true,"branch":"%s"}\n' "$br"
+				;;
+			# One-click upgrade: fetch the current QoS-Ex-install.sh and run it detached
+			# (it downloads and verifies all three scripts, then installs the
+			# ones whose content changed). A LuCI app install reloads rpcd and
+			# ends every LuCI session, so the job
+			# must outlive this call: own session, every fd off rpcd's pipe.
+			# Progress in /var/log/qos-ex-update.log, ending "@@RC=<exit code>".
+			update_run)
+				_lg=/var/log/qos-ex-update.log; _pid=/var/run/qos-ex-update.pid
+				upd_busy && json_err "an update is already running"
+				_d=$(mktemp -d /tmp/qos-ex-up.XXXXXX) || upd_fail "mktemp failed"
+				# Private (the saved token), then public.
+				_ok=0; _why=""; _src=""
+				for _au in "$(gh_auth)" "X-QoS-Ex: anon"; do
+					[ -n "$_au" ] || { _why="token: none saved"; continue; }
+					case "$_au" in Authorization*) _src=token ;; *) _src=public ;; esac
+					if gh_get QoS-Ex-install.sh "$_au" > "$_d/QoS-Ex-install.sh"; then
+						_l=""; read -r _l < "$_d/QoS-Ex-install.sh"
+						case "$_l" in '#!'*) _ok=1; gh_get SHA256SUMS "$_au" > "$_d/SHA256SUMS"; break ;; esac
+						GH_ERR="not a script"
+					fi
+					_why="${_why:+$_why; }$_src: ${GH_ERR:-no reply}"
+				done
+				[ "$_ok" = 1 ] || { rm -rf "$_d"; upd_fail "could not download QoS-Ex-install.sh from GitHub ($_why)"; }
+				sh -n "$_d/QoS-Ex-install.sh" 2>/dev/null || { rm -rf "$_d"; upd_fail "QoS-Ex-install.sh failed its syntax check"; }
+				# The installer has to be the one the manifest names; it
+				# checks the three scripts against the same manifest itself.
+				# The manifest is published last, so a mismatch means an
+				# update is part-way through being pushed.
+				_w=$(awk '$2 == "QoS-Ex-install.sh" { print $1; exit }' "$_d/SHA256SUMS" 2>/dev/null)
+				_g=$(sha256sum "$_d/QoS-Ex-install.sh" 2>/dev/null | cut -d' ' -f1)
+				[ -n "$_w" ] && [ "$_w" = "$_g" ] || { rm -rf "$_d"; upd_fail "the files on GitHub do not match their manifest - an update is probably being published, try again in a few minutes"; }
+				_br=$(upd_ref)
+				echo "$(date '+%Y-%m-%d %H:%M:%S') update started from the Maintenance tab (branch $_br, QoS-Ex-install.sh fetched: $_src)" > "$_lg"
+				# QoS-Ex-install.sh logs its own result and reason. The line added
+				# here covers an installer that died without saying why.
+				# A reinstalled LuCI app leaves /var/run/qos-ex-logout: the
+				# sessions end 8 s after @@RC=, once the page has shown the end.
+				_ss=""; command -v setsid >/dev/null 2>&1 && _ss=setsid
+				$_ss sh -c 'echo $$ > "$2"; rm -f /var/run/qos-ex-logout
+					QOS_EX_KEEP_SESSIONS=1 sh "$1/QoS-Ex-install.sh" -b "$3"; rc=$?
+					[ "$rc" = 0 ] || { echo "$(date "+%Y-%m-%d %H:%M:%S") [ERR ] update: FAILED (exit $rc) - full output in /var/log/qos-ex-update.log (System > Maintenance)" >> /var/log/qos-ex.log; logger -t QoS-Ex "update: FAILED (exit $rc) - see /var/log/qos-ex-update.log"; }
+					echo "@@RC=$rc"; rm -rf "$1"
+					if [ -e /var/run/qos-ex-logout ]; then
+						rm -f /var/run/qos-ex-logout; sleep 8
+						ubus call session list 2>/dev/null | sed -n "s/.*\"ubus_rpc_session\": *\"\([0-9a-f]\{32\}\)\".*/\1/p" |
+						while read -r sid; do
+							[ "$sid" = 00000000000000000000000000000000 ] ||
+								ubus call session destroy "{\"ubus_rpc_session\":\"$sid\"}" >/dev/null 2>&1
+						done
+					fi
+					rm -f "$2"' \
+					qos-ex-update "$_d" "$_pid" "$_br" </dev/null >>"$_lg" 2>&1 &
+				printf '{"ok":true}\n'
+				;;
+			# Auto Setup, reading: the router check, the hardware fingerprint
+			# and the speed test's progress (its state file, no backend run).
+			autosetup)
+				read_params
+				json_get_var verb verb 2>/dev/null
+				case "$verb" in
+					probe|hw) emit_text "$QOS_EX_BIN" autosetup "$verb" ;;
+					result)
+						if [ -s /var/run/qos-ex-autosetup ]; then emit_text as_result
+						else emit_text true; fi ;;
+					*) json_err "bad verb" ;;
+				esac
+				;;
+			# Auto Setup, changing: suggest computes the suggestions AND saves
+			# them to the file apply reads (/var/run/qos-ex-autosetup.sugg) --
+			# under the write ACL, or a read-only session could swap the rates
+			# an admin's Apply then writes (down / up: line speeds typed in,
+			# kbps). Its reply leads with the router check (-p), so the page
+			# runs the backend once. The speed test runs detached (about 30 s;
+			# the page follows its state file), apply / undo wait as a
+			# lifecycle verb does (they reload a running shaper), skip marks
+			# the router as set up by hand, again brings the Auto Setup tab
+			# back. keys: what apply writes, as the backend names them (all,
+			# steering, section.option, dev= / low= ...).
+			autosetup_run)
+				read_params
+				json_get_var verb verb 2>/dev/null
+				json_get_var keys keys 2>/dev/null
+				[ -f "$QOS_EX_BIN" ] || json_err "backend missing at $QOS_EX_BIN"
+				rc=0; pend=0
+				case "$verb" in
+					suggest)
+						json_get_var _dn down 2>/dev/null; json_get_var _up up 2>/dev/null
+						case "$_dn$_up" in *[!0-9]*) json_err "bad speed" ;; esac
+						if [ -n "$_dn" ] && [ -n "$_up" ]; then emit_text "$QOS_EX_BIN" autosetup suggest "$_dn" "$_up" -p
+						else emit_text "$QOS_EX_BIN" autosetup suggest -p; fi
+						exit 0 ;;
+					speedtest)
+						command -v flock >/dev/null 2>&1 && ! flock -n /var/run/qos-ex-autosetup.lock true 2>/dev/null &&
+							json_err "a speed test is already running"
+						# The last result goes first: the page waits for this run's.
+						rm -f /var/run/qos-ex-autosetup
+						_ss=""; command -v setsid >/dev/null 2>&1 && _ss=setsid
+						$_ss "$QOS_EX_BIN" autosetup speedtest </dev/null >/dev/null 2>&1 &
+						;;
+					apply)
+						case "$keys" in ''|*[!a-z0-9_.:=' ']*) json_err "bad keys" ;; esac
+						# shellcheck disable=SC2086  # a checked word list
+						run_bounded "$QOS_EX_BIN" autosetup apply $keys
+						;;
+					undo) run_bounded "$QOS_EX_BIN" autosetup undo ;;
+					skip|again) "$QOS_EX_BIN" autosetup "$verb" >/dev/null 2>&1 || rc=$? ;;
+					*) json_err "bad verb" ;;
+				esac
+				printf '{"ok":%s,"rc":%s,"pending":%s}\n' \
+					"$( [ "$rc" = 0 ] && echo true || echo false )" "$rc" "$( [ "$pend" = 1 ] && echo true || echo false )"
+				;;
+			# Full uninstall (qos-ex.sh uninstall). Detached like update_run: it
+			# removes this shim and reloads rpcd under the caller.
+			uninstall_run)
+				[ -f "$QOS_EX_BIN" ] || json_err "backend missing at $QOS_EX_BIN"
+				_ss=""; command -v setsid >/dev/null 2>&1 && _ss=setsid
+				$_ss sh -c 'sleep 1; sh "$1" uninstall' qos-ex-uninstall "$QOS_EX_BIN" \
+					</dev/null >/var/log/qos-ex-uninstall.log 2>&1 &
+				printf '{"ok":true}\n'
+				;;
+			update_log)
+				# /var/log only: a fixed /tmp name is anyone's to plant, and
+				# this runs as root and hands back whatever the name points at.
+				# running: an update is under way (upd_busy), so a page opened
+				# meanwhile greys out Update now and follows it.
+				_lg=/var/log/qos-ex-update.log; _run=false
+				upd_busy && _run=true
+				if [ -s "$_lg" ]; then _o=$(emit_text tail -n 200 "$_lg")
+				else _o=$(emit_text echo "(no update run yet)"); fi
+				printf '{"running":%s,%s\n' "$_run" "${_o#\{}"
+				;;
+			pf_status)
+				# While a page polls, the daemon writes the report to tmpfs
+				# once a loop (.viewer tells it a page is looking) and it is
+				# handed out from there: no 270 KB script parse per poll. Used
+				# when it is under 10 s old and not older than the config;
+				# else the backend answers as before.
+				_f=/var/run/qos-ex-pingfilter/status
+				[ -d /var/run/qos-ex-pingfilter ] && : > /var/run/qos-ex-pingfilter/.viewer 2>/dev/null
+				_fm=$(date -r "$_f" +%s 2>/dev/null || echo 0)
+				_cm=$(date -r /etc/config/"$UCI_PKG" +%s 2>/dev/null || echo 0)
+				if [ -s "$_f" ] && [ "$_fm" -ge "$_cm" ] && [ $(( $(date +%s) - _fm )) -lt 10 ]; then
+					emit_text cat "$_f"
+				else
+					emit_text $PFCMD status
+				fi
+				;;
+			pf_servers)
+				# Shim must emit a single valid JSON object — rpcd rejects
+				# garbage, an empty stdout, or stderr leaking in. Capture
+				# the Ping Filter backend's output ($PFCMD servers) and
+				# validate it looks like JSON before emitting; fall back to a
+				# safe empty object otherwise.
+				# The JSON is one line starting with '{'. Extract it rather
+				# than demanding pristine stdout — heal/daemon messages from
+				# the backend must never make the UI read "disabled".
+				# While a page keeps asking, the daemon builds this once per
+				# scan and leaves it in tmpfs; .viewer is how it knows. Used
+				# when it is under a minute old, else built here as before.
+				_j=/var/run/qos-ex-pingfilter/servers.json
+				[ -d /var/run/qos-ex-pingfilter ] && : > /var/run/qos-ex-pingfilter/.viewer 2>/dev/null
+				out=""
+				[ -s "$_j" ] && [ -n "$(find "$_j" -mmin -1 2>/dev/null)" ] && out=$(cat "$_j" 2>/dev/null)
+				case "$out" in '{'*'}') ;; *) out=$($PFCMD servers 2>/dev/null | grep '^{' | tail -n 1) ;; esac
+				case "$out" in
+					'{'*'}') printf '%s\n' "$out" ;;
+					*) printf '{"servers":[],"ts":0,"threshold":0,"enabled":0,"activity":"idle"}\n' ;;
+				esac
+				;;
+			pf_telemetry)
+				read_params
+				json_get_var ip ip 2>/dev/null
+				# Reject, don't rewrite. tr -cd turned 192.168.1.1x into
+				# 192.168.1.1 and carried on, so the shim acted on a host the
+				# operator had not named and reported success for it.
+				clean_ip=$(printf '%s' "$ip" | tr -cd '0-9a-fA-F.:')
+				if [ -z "$clean_ip" ] || [ "$clean_ip" != "$ip" ]; then
+					printf '{"ip":"","pps":0,"bps":0,"jitter":0,"gap_max":0,"gaps":0,"stall":0,"samples":[]}\n'
+					exit 0
+				fi
+				out=$($PFCMD telemetry "$clean_ip" 2>/dev/null | grep '^{' | tail -n 1)
+				case "$out" in
+					'{'*'}') printf '%s\n' "$out" ;;
+					*) printf '{"ip":"%s","pps":0,"bps":0,"jitter":0,"gap_max":0,"gaps":0,"stall":0,"samples":[]}\n' "$clean_ip" ;;
+				esac
+				;;
+			pf_action)
+				read_params
+				json_get_var verb verb 2>/dev/null
+				json_get_var ip   ip   2>/dev/null
+				json_get_var ms   ms   2>/dev/null
+				case "$verb" in
+					start|stop|restart|reload|scan|clear|enable|disable) ;;
+					verify) ;;
+					session_reset|reclassify|refresh_lists) ;;
+					clear_wl|clear_bl) ;;
+					whitelist|blacklist|forget|ungrade) ;;
+					threshold|radius|catch) ;;
+					mode|profile) ;;
+					*) json_err "bad verb" ;;
+				esac
+				case "$verb" in
+					whitelist|blacklist|forget|ungrade)
+						# an address, or for the lists an IPv4 prefix (a.b.c.d/len)
+						clean_ip=$(printf '%s' "$ip" | tr -cd '0-9a-fA-F.:/')
+						[ -n "$clean_ip" ] && [ "$clean_ip" = "$ip" ] || json_err "bad ip"
+						rc=0
+						$PFCMD "$verb" "$clean_ip" >/dev/null 2>&1 || rc=$?
+						;;
+					threshold)
+						# 0 = disabled (visibility only); the map slider can
+						# reach 0 now. Accept 0..5000, reject negatives/non-digits.
+						case "$ms" in ''|*[!0-9]*) json_err "bad ms" ;; esac
+						[ "$ms" -le 5000 ] 2>/dev/null || json_err "bad ms"
+						rc=0
+						$PFCMD threshold "$ms" >/dev/null 2>&1 || rc=$?
+						;;
+					radius)
+						# The generic numeric 'ms' param carries the km value here.
+						# '' is listed explicitly: it does not match *[!0-9]* and
+						# used to survive to the range test, which rejected it
+						# only because [ "" -ge 50 ] errors.
+						case "$ms" in ''|*[!0-9]*) json_err "bad km" ;; esac
+						[ "$ms" -ge 50 ] 2>/dev/null && [ "$ms" -le 20000 ] 2>/dev/null \
+							|| json_err "bad km"
+						rc=0
+						$PFCMD radius "$ms" >/dev/null 2>&1 || rc=$?
+						;;
+					catch)
+						# Ping Catch limit in ms; 0 turns it off.
+						case "$ms" in ''|*[!0-9]*) json_err "bad ms" ;; esac
+						[ "$ms" -le 250 ] 2>/dev/null || json_err "bad ms"
+						rc=0
+						$PFCMD catch "$ms" >/dev/null 2>&1 || rc=$?
+						;;
+					mode)
+						# The generic string 'ip' param carries the mode here
+						# (ping|distance) — same slot-reuse trick radius uses for km.
+						case "$ip" in
+							ping|distance) ;;
+							*) json_err "bad mode" ;;
+						esac
+						rc=0
+						$PFCMD mode "$ip" >/dev/null 2>&1 || rc=$?
+						;;
+					profile)
+						case "$ip" in competitive|casual|distance|observe|custom) ;; *) json_err "bad profile" ;; esac
+						rc=0
+						$PFCMD profile "$ip" >/dev/null 2>&1 || rc=$?
+						;;
+					*)
+						rc=0
+						$PFCMD "$verb" >/dev/null 2>&1 || rc=$?
+						;;
+				esac
+				printf '{"ok":%s,"rc":%s}\n' "$( [ $rc -eq 0 ] && echo true || echo false )" "$rc"
+				;;
+			pf_text)
+				# READ-ONLY diagnostics, returned as {"output": "..."}: the
+				# Tools tab of Ping Filter > Settings and the PF nft error on
+				# System > Logs. This method is granted under the ACL's *read*
+				# section, so nothing here may change state; verbs that do
+				# live in pf_run.
+				read_params
+				json_get_var verb verb 2>/dev/null
+				json_get_var ip   ip   2>/dev/null
+				case "$verb" in
+					status|servers|dump|verify) ;;
+					# A plain read of the daemon's error file, as nfterr above:
+					# through the Ping Filter script, System > Logs parsed all of
+					# it on every poll to run one cat.
+					nfterr)
+						if [ -f /var/run/qos-ex-pingfilter-nft.err ]; then emit_text cat /var/run/qos-ex-pingfilter-nft.err
+						else emit_text echo "(no recent ping filter NFT error)"; fi
+						exit 0 ;;
+					*) json_err "bad verb" ;;
+				esac
+				emit_text $PFCMD "$verb"
+				;;
+			pf_run)
+				# Mutating counterparts of pf_text: they change state AND
+				# produce a textual receipt the Tools tab shows. Granted
+				# under the ACL's *write* section, which is the whole reason
+				# this method exists separately from pf_text.
+				# geo_check and livecap live here too although they store
+				# nothing: geo_check makes ~6 plain-HTTP requests to third-party
+				# geo APIs and livecap runs a 10s tcpdump plus probes, so under
+				# the read ACL any read-only session could fan them out.
+				read_params
+				json_get_var verb verb 2>/dev/null
+				json_get_var ip   ip   2>/dev/null
+				case "$verb" in
+					scan|clear|refresh_lists|session_reset) ;;
+					reclassify) ;;
+					geo_check|livecap) ;;
+					*) json_err "bad verb" ;;
+				esac
+				if [ "$verb" = "geo_check" ]; then
+					clean_ip=$(printf '%s' "$ip" | tr -cd '0-9a-fA-F.:')
+					[ -n "$clean_ip" ] && [ "$clean_ip" = "$ip" ] || json_err "bad ip"
+					emit_text $PFCMD geo_check "$clean_ip"
+				elif [ "$verb" = "livecap" ]; then
+					# Optional ip (empty = auto-detect the live game flow).
+					# 10s window: bounded, safely under the rpc timeout.
+					clean_ip=$(printf '%s' "$ip" | tr -cd '0-9a-fA-F.:')
+					[ -z "$ip" ] || [ "$clean_ip" = "$ip" ] || json_err "bad ip"
+					emit_text $PFCMD livecap "$clean_ip" 10
+				else
+					emit_text $PFCMD "$verb"
+				fi
+				;;
+			pf_sessions)
+				out=$($PFCMD sessions 2>/dev/null | grep '^{' | tail -n 1)
+				case "$out" in
+					'{'*'}') printf '%s\n' "$out" ;;
+					*) printf '{"sessions":[]}\n' ;;
+				esac
+				;;
+			cfg_export)
+				# The settings file (QoS-Ex Settings.cfg), for a browser download.
+				emit_text cfg_pack
+				;;
+			cfg_import)
+				# Replace the settings with an uploaded copy. A settings file
+				# must carry its header and an unchanged hash; an older plain
+				# backup (no header) is still taken. Either way it has to
+				# parse as UCI, carry the settings section and only QoS-Ex
+				# section types. The current file is kept as
+				# /etc/qos-ex/config.bak, and missing options are topped up
+				# exactly as an upgrade does.
+				read_params
+				json_get_var data data 2>/dev/null
+				[ -n "$data" ] || json_err "empty file"
+				[ "${#data}" -le 65536 ] || json_err "file too large"
+				_d=$(mktemp -d /tmp/qos-ex-imp.XXXXXX) || json_err "mktemp failed"
+				printf '%s\n' "$data" | tr -d '\r' > "$_d/in"
+				_l=""; read -r _l < "$_d/in"
+				_old=1
+				if [ "$_l" = "$CFG_MARK" ]; then
+					_old=0
+					_w=$(sed -n '3s/^# sha256=\([0-9a-f]\{64\}\)$/\1/p' "$_d/in")
+					_b=$(sed 1,3d "$_d/in")
+					[ -n "$_w" ] && [ "$_w" = "$(cfg_sum "$_b")" ] || {
+						rm -rf "$_d"; json_err "the settings file was changed or cut short - download it again"; }
+					printf '%s\n' "$_b" > "$_d/$UCI_PKG"
+				else
+					mv "$_d/in" "$_d/$UCI_PKG"
+				fi
+				rm -f "$_d/in"
+				if ! uci -q -c "$_d" show "$UCI_PKG" >/dev/null 2>&1 \
+				   || [ "$(uci -q -c "$_d" get "$UCI_PKG".settings)" != "global" ]; then
+					rm -rf "$_d"; json_err "not a QoS-Ex settings file"
+				fi
+				_bad=$(uci -q -c "$_d" show "$UCI_PKG" | sed -n "s/^$UCI_PKG\.[^.=]*=//p" | while read -r _t; do
+					case "$CFG_TYPES" in *" $_t "*) ;; *) echo "$_t" ;; esac
+				done)
+				[ -z "$_bad" ] || { rm -rf "$_d"; json_err "not a QoS-Ex settings file (section $(echo "$_bad" | head -n 1))"; }
+				mkdir -p /etc/qos-ex 2>/dev/null
+				cp /etc/config/"$UCI_PKG" /etc/qos-ex/config.bak 2>/dev/null
+				# As reset_defaults: CLI changes staged against the old file go.
+				uci -q revert "$UCI_PKG" 2>/dev/null
+				rc=0; pend=0
+				if cp "$_d/$UCI_PKG" /etc/config/"$UCI_PKG".new 2>/dev/null \
+				   && mv -f /etc/config/"$UCI_PKG".new /etc/config/"$UCI_PKG"; then
+					"$QOS_EX_BIN" migrate >/dev/null 2>&1
+					# The file sets autosetup.done, which shows or hides the
+					# Auto Setup tab: LuCI builds its menu again.
+					rm -f /tmp/luci-indexcache* 2>/dev/null
+					apply_master
+				else
+					rm -f /etc/config/"$UCI_PKG".new; rm -rf "$_d"; json_err "could not write the settings"
+				fi
+				rm -rf "$_d"
+				printf '{"ok":%s,"rc":%s,"pending":%s,"old":%s}\n' "$( [ $rc -eq 0 ] && echo true || echo false )" "$rc" "$( [ "$pend" = 1 ] && echo true || echo false )" "$( [ "$_old" = 1 ] && echo true || echo false )"
+				;;
+			pf_lists)
+				# Return current whitelist and blacklist from UCI, enriched
+				# with country/city/ping/ts (last seen) from the runtime TSV
+				# when available. A TSV row ages out after row_ttl (7 days by
+				# default); a whitelist / blacklist IP's row does not. Entries
+				# with no TSV row return blank geo fields and are still listed.
+				wl=$(uci -q get "$UCI_PKG".pingfilter.whitelist 2>/dev/null | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+				bl=$(uci -q get "$UCI_PKG".pingfilter.blacklist 2>/dev/null | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+				tsv="/var/run/qos-ex-pingfilter/servers.tsv"
+				[ -f "$tsv" ] || tsv=""
+
+				# Use awk to build JSON arrays of {ip, country, city, ping,
+				# lat, lon, ts} for each list, joining against the TSV.
+				printf '{'
+				printf '"whitelist":'
+				pf_list_json "$wl" "$tsv"
+				printf ',"blacklist":'
+				pf_list_json "$bl" "$tsv"
+
+				printf '}\n'
+				;;
+			pf_set_home)
+				# Sets the home location for distance-based classification.
+				# All four params are optional. An empty lat or lon clears that
+				# option (the Map's clearHome sends both empty); an empty or 0
+				# radius_km and an empty mode leave theirs unchanged.
+				# After save, reload the daemon so it re-reads UCI and
+				# reclassifies the cache against the new home/radius/mode.
+				read_params
+				json_get_var lat  lat       2>/dev/null
+				json_get_var lon  lon       2>/dev/null
+				json_get_var rkm  radius_km 2>/dev/null
+				json_get_var mode mode      2>/dev/null
+
+				# Validate before writing UCI. Empty is allowed (= unset).
+				[ -z "$lat" ] || { valid_num "$lat" && in_range "$lat" 90;  } || json_err "bad lat"
+				[ -z "$lon" ] || { valid_num "$lon" && in_range "$lon" 180; } || json_err "bad lon"
+				# Same bounds pf_action's radius verb enforces: both write
+				# this one option, and through 1.0.2.2 only one of them
+				# checked the range.
+				case "$rkm" in
+					''|0) ;;
+					*[!0-9]*) json_err "bad radius" ;;
+					*) [ "$rkm" -ge 50 ] 2>/dev/null && [ "$rkm" -le 20000 ] 2>/dev/null \
+						|| json_err "bad radius" ;;
+				esac
+				case "$mode" in
+					''|ping|distance) ;;
+					*) json_err "bad mode" ;;
+				esac
+
+				# Apply via uci. Empty value = clear (rmempty). Every set is
+				# checked: through 1.0.7.1 a failed write (full overlay,
+				# missing section) still answered ok:true.
+				wrc=0
+				if [ -n "$lat" ]; then
+					uci set "$UCI_PKG.pingfilter.home_lat=$lat" 2>/dev/null || wrc=1
+				else
+					uci -q delete "$UCI_PKG.pingfilter.home_lat" 2>/dev/null
+				fi
+				if [ -n "$lon" ]; then
+					uci set "$UCI_PKG.pingfilter.home_lon=$lon" 2>/dev/null || wrc=1
+				else
+					uci -q delete "$UCI_PKG.pingfilter.home_lon" 2>/dev/null
+				fi
+				if [ -n "$rkm" ] && [ "$rkm" != "0" ]; then
+					uci set "$UCI_PKG.pingfilter.home_radius_km=$rkm" 2>/dev/null || wrc=1
+				fi
+				# Each mode keeps its own number (the Ping Filter ignores the
+				# ping limit in distance mode), so a switch zeroes nothing.
+				if [ -n "$mode" ]; then
+					uci set "$UCI_PKG.pingfilter.block_mode=$mode" 2>/dev/null || wrc=1
+				fi
+				if [ "$wrc" -ne 0 ]; then
+					# Only the options this call stages: a revert of the whole
+					# package took changes the Ping Filter had staged too.
+					for _o in home_lat home_lon home_radius_km block_mode; do
+						uci -q revert "$UCI_PKG.pingfilter.$_o" 2>/dev/null
+					done
+					json_err "uci write failed"
+				fi
+				uci commit "$UCI_PKG" 2>/dev/null || json_err "uci commit failed"
+				# A line in the Ping Filter log, where pf_dispatch writes the
+				# PF's other actions, in its format (QoS-Ex-PF.sh _logline).
+				# Lat/lon are deliberately NOT logged — the debug report
+				# embeds the log tail and home coordinates must never leak
+				# into it. Radius/mode only.
+				echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO] pingfilter: set_home (home location updated)${rkm:+ radius=${rkm}km}${mode:+ mode=$mode}" >> /var/log/qos-ex-pf-daemon.log 2>/dev/null
+
+				# Reload the daemon to pick up the new location/mode.
+				# It's OK if PF is disabled — reload becomes a no-op and
+				# we still report success since the UCI write succeeded.
+				rc=0
+				pf_en=$(uci -q get "$UCI_PKG".pingfilter.enabled 2>/dev/null)
+				if [ "$pf_en" = "1" ]; then
+					$PFCMD reload >/dev/null 2>&1 || rc=$?
+				fi
+				printf '{"ok":%s,"rc":%s}\n' \
+					"$( [ $rc -eq 0 ] && echo true || echo false )" "$rc"
+				;;
+			*) printf '{"error":"unknown method"}\n'; exit 0 ;;
+		esac
+		;;
+	*) echo "Usage: $0 {list|call <method>}"; exit 1 ;;
+esac

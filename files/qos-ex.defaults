@@ -1,0 +1,37 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# QoS-Ex package, first run: put the packaged scripts (and the LuCI app's
+# files, qos-ex-luci.tar.gz) in /root and run the installer. Installed as
+# /etc/uci-defaults/90-qos-ex, so it runs once - at the first boot of a
+# firmware image, or when the package is installed or upgraded on a running
+# router.
+
+S=/usr/lib/qos-ex
+[ -f "$S/QoS-Ex.sh" ] || exit 0
+
+# /root is where the installer keeps its sources (upgrades, sysupgrade,
+# uninstall all work from there).
+cp -f "$S/QoS-Ex.sh" "$S/QoS-Ex-PF.sh" "$S/QoS-Ex-luci-app.sh" "$S/qos-ex-luci.tar.gz" "$S/QoS-Ex-install.sh" /root/ || exit 1
+mkdir -p /root/lib && cp -f "$S/lib/install.sh" /root/lib/ || exit 1
+
+# First boot after a sysupgrade: the installer's own hook (kept with your
+# settings) runs next and reinstalls from /root. Leave it to that.
+[ ! -x /usr/sbin/qos-ex.sh ] && [ -f /etc/uci-defaults/99-qos-ex-reinstall ] && exit 0
+
+# Otherwise install in the background. At first boot this script runs before
+# the network, ubus and rpcd are up, so wait for a default route (10 minutes
+# at most, then install anyway). On a running router it runs inside the
+# package manager's postinst, which holds the opkg / apk lock: wait for that
+# to end too (2 minutes at most), or every package check reads "missing".
+(
+	n=0
+	while [ "$n" -lt 600 ] && [ -z "$(ip route show default 2>/dev/null)$(ip -6 route show default 2>/dev/null)" ]; do
+		sleep 10; n=$((n + 10))
+	done
+	n=0
+	while [ "$n" -lt 120 ] && pidof opkg apk >/dev/null 2>&1; do
+		sleep 2; n=$((n + 2))
+	done
+	sh /root/QoS-Ex.sh install
+) </dev/null >/var/log/qos-ex-pkg-install.log 2>&1 &
+exit 0

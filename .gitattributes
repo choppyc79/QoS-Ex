@@ -1,0 +1,11 @@
+# QoS-Ex ships shell scripts that run on OpenWrt. CRLF breaks them, so LF is
+# enforced here rather than left to each clone's core.autocrlf.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+*.json text eol=lf
+# The LuCI app's files as one archive (built by tools/mkluci.sh).
+*.tar.gz binary
+*.md   text eol=lf
