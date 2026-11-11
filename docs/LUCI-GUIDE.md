@@ -156,7 +156,8 @@ later.
 
 ### ② Devices
 
-Every device the router knows, each set to **Normal**, **Gaming** or **Low
+Every device on your network that the router knows (not the router itself,
+nor anything on the WAN side), each set to **Normal**, **Gaming** or **Low
 priority**. It is the same list as **Setup → Devices & Ports**. A gaming
 device's game traffic goes to the Gaming class, and low-priority devices give
 way to everything else.
@@ -539,8 +540,9 @@ rules.
 
 ### Devices & Ports
 
-- **Devices** — every device the router knows (name, address and MAC), each
-  set to one of:
+- **Devices** — every device on your network that the router knows (name,
+  address and MAC; not the router itself, nor anything on the WAN side),
+  each set to one of:
   - **Normal**;
   - **Gaming**: the device's game traffic goes to the Gaming class;
   - **Low priority**: the device's UDP goes to Low (all its traffic, under
