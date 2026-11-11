@@ -240,8 +240,10 @@ return view.extend({
 				link(_('Restore a settings file…'), function() { h.cfgRestore(); }) ]) ]);
 
 		// One backend run brings the router check and the suggestions; the
-		// devices come from LuCI's host list.
-		h.rpcSafe(h.callHostHints(), {}).then(function(hints) { view.paintDevices(hints); });
+		// devices come from LuCI's host list, without the router itself or
+		// the WAN side (the WAN device from the speed test, else the shaper's).
+		h.lanHints(view.res.wan || h.parseState((loaded[1] && loaded[1].output) || '').state.wan || '')
+			.then(function(hints) { view.paintDevices(hints); });
 		view.refresh();
 		// A test running (the page was reloaded): follow it. A fresh result:
 		// the steps open on it.

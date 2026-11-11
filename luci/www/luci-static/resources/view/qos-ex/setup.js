@@ -622,7 +622,8 @@ function buildRules(view, scope, loaded) {
 	}
 	function kind(v) { return macRe.test(v) ? 'mac' : isIp4(v) ? 'ipv4' : isIp6(v) ? 'ipv6' : ''; }
 
-	// Every device the router knows (DHCP leases and neighbours). addrMac
+	// Every device on the network the router knows (DHCP leases and
+	// neighbours; not the router itself, nor the WAN side). addrMac
 	// maps a known address to its MAC, so a saved address of a device the
 	// router can see is ticked as that device (saved by MAC on Save).
 	var devs = {}, addrMac = {};
@@ -1063,6 +1064,7 @@ function buildRules(view, scope, loaded) {
 
 return view.extend({
 	load: function() {
+		var st = h.rpcSafe(h.callStatus(), {});
 		return Promise.all([
 			// Retired values a config the backend has not migrated yet may
 			// still hold: SGS HFSC curves (1.2.9.2) become plain HFSC, the SGS
@@ -1081,9 +1083,11 @@ return view.extend({
 			fs.list('/sys/class/net').catch(function() { return []; }),
 			// The full report: the live WAN and LAN devices are not in the
 			// poll snapshot (state), only in status.
-			h.rpcSafe(h.callStatus(), {}),
+			st,
 			h.rpcSafe(h.callRuleset()),
-			h.callHostHints().catch(function() { return {}; })
+			// The devices to pick from: not the router itself, and nothing
+			// on the WAN side of the live WAN device.
+			h.lanHints(st.then(function(r) { return (/^wan_live=(\S+)/m.exec((r && r.output) || '') || [])[1] || ''; }))
 		]);
 	},
 

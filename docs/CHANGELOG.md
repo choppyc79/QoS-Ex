@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.3.9.8 · Ping Filter 2.0.9.4 · shaper 3.2.1.7**
+Current: **LuCI app 1.3.9.9 · Ping Filter 2.0.9.4 · shaper 3.2.1.7**
+
+## LuCI app 1.3.9.9
+
+- Fixed: the device lists on **Setup → Devices & Ports** and in Auto Setup's **② Devices** showed the router itself (`OpenWrt.lan` and its WAN address) and, on an Ethernet WAN, hosts on the WAN side such as the ISP's gateway. They now list only the devices on your network.
 
 ## LuCI app 1.3.9.8 and the installer
 

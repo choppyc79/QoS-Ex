@@ -517,6 +517,7 @@ return baseclass.extend({
 	callRuleset:   rpc.declare({ object: 'qos-ex', method: 'ruleset'    }),
 	callConntrack: rpc.declare({ object: 'qos-ex', method: 'conntrack', params: [ 'max' ] }),
 	callHostHints: rpc.declare({ object: 'luci-rpc', method: 'getHostHints', expect: { '': {} } }),
+	callNetDevices: rpc.declare({ object: 'luci-rpc', method: 'getNetworkDevices', expect: { '': {} } }),
 	callAction:    rpc.declare({ object: 'qos-ex', method: 'action',    params: [ 'verb' ] }),
 	callPfStatus:  cacheTap('pf_status',  rpc.declare({ object: 'qos-ex', method: 'pf_status'  })),
 	callPfServers: cacheTap('pf_servers', rpc.declare({ object: 'qos-ex', method: 'pf_servers' })),
@@ -812,6 +813,51 @@ return baseclass.extend({
 			if (ips.length) m[String(mac).toLowerCase()] = ips.map(String);
 		});
 		return m;
+	},
+
+	// The devices to pick from on Setup -> Devices & Ports and in Auto Setup:
+	// the host hints without the router itself (getHostHints also lists the
+	// router's own interfaces) and without the hosts on the WAN side (an
+	// Ethernet WAN's gateway, the router upstream of a double NAT), i.e. a
+	// hint whose IPv4 addresses all sit in a subnet of the WAN device. wan =
+	// that device, or a promise of it; '' leaves the WAN side in. If
+	// getNetworkDevices fails, every hint stays.
+	lanHints: function(wan) {
+		function v4(s) {
+			var p = String(s || '').split('.'), n = 0;
+			if (p.length !== 4) return null;
+			for (var i = 0; i < 4; i++) {
+				if (!/^\d{1,3}$/.test(p[i]) || +p[i] > 255) return null;
+				n = n * 256 + +p[i];
+			}
+			return n;
+		}
+		return Promise.all([
+			this.callHostHints().catch(function() { return {}; }),
+			this.callNetDevices().catch(function() { return {}; }),
+			Promise.resolve(wan).catch(function() { return ''; })
+		]).then(function(r) {
+			var hints = r[0] || {}, devs = r[1] || {}, own = {}, nets = [], out = {};
+			Object.keys(devs).forEach(function(name) {
+				var d = devs[name] || {}, m = String(d.mac || '').toLowerCase();
+				if (m && m !== '00:00:00:00:00:00') own[m] = true;
+				if (r[2] && name === r[2]) [].concat(d.ipaddrs || []).forEach(function(a) {
+					var ip = v4(a && a.address), mask = v4(a && a.netmask);
+					if (ip !== null && mask) nets.push([ ip, mask ]);
+				});
+			});
+			function wanSide(ip) {
+				var n = v4(ip);
+				return n !== null && nets.some(function(w) { return ((n ^ w[0]) & w[1]) === 0; });
+			}
+			Object.keys(hints).forEach(function(mac) {
+				var x = hints[mac] || {}, a4 = [].concat(x.ipaddrs || x.ipv4 || []);
+				if (own[String(mac).toLowerCase()]) return;
+				if (nets.length && a4.length && a4.every(wanSide)) return;
+				out[mac] = x;
+			});
+			return out;
+		});
 	},
 
 	// How a monitored device is shown: an address as it is; a MAC as the
