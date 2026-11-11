@@ -13,7 +13,7 @@
 					"pf_text", "pf_lists", "pf_sessions", "update_check", "update_log",
 					"autosetup"
 				],
-				"luci-rpc": [ "getHostHints" ]
+				"luci-rpc": [ "getHostHints", "getNetworkDevices" ]
 			},
 			"uci":  [ "qos-ex" ]
 		},
