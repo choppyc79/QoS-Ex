@@ -81,9 +81,8 @@ return view.extend({
 	// says so once (rpcSafe) -- it used to be swallowed without a word.
 	refresh: function() {
 		var view = this;
-		uci.unload('qos-ex');
 		return Promise.all([
-			uci.load('qos-ex').catch(function() { return null; }),
+			h.uciReload(),
 			h.rpcSafe(h.callPfServers(), { servers: [] })
 		]).then(function(r) {
 			if (h.pfReal(r[1])) view.payload = r[1];
@@ -122,6 +121,9 @@ return view.extend({
 	},
 
 	paint: function() {
+		// The refresh is reading the config again: its own paint, at its
+		// end, draws (this one would show the setup card and Watch only).
+		if (h.uciBusy()) return;
 		var view = this, j = view.payload || {};
 		// Live node first (SPA re-renders detach old refs); the render-time
 		// root covers the first paint, which runs before LuCI has attached
