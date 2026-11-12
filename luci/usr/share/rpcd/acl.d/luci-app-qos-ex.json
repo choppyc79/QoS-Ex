@@ -7,7 +7,7 @@
 			},
 			"ubus": {
 				"qos-ex":  [
-					"status", "state", "stats", "counters", "live", "nfterr", "logdump",
+					"status", "state", "stats", "counters", "live", "nfterr", "logdump", "logs",
 					"ruleset", "conntrack",
 					"pf_status", "pf_servers", "pf_telemetry",
 					"pf_text", "pf_lists", "pf_sessions", "update_check", "update_log",

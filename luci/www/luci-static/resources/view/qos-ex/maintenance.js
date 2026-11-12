@@ -1,5 +1,6 @@
 'use strict';
 'require view';
+'require uci';
 'require ui';
 'require dom';
 'require view.qos-ex._helpers as h';
@@ -12,10 +13,13 @@
 return view.extend({
 	// Live replies, not the last-known ones (h.loadC): this page renders
 	// once, and after Update now it reloads to show the new versions.
+	// The config is for h.pageHead's check of the menu this browser tab
+	// kept; the page opens without it.
 	load: function() {
 		return Promise.all([
 			h.rpcSafe(h.callState()),
-			h.rpcSafe(h.callPfStatus(), {})
+			h.rpcSafe(h.callPfStatus(), {}),
+			uci.load('qos-ex').catch(function() { return null; })
 		]);
 	},
 
@@ -312,8 +316,9 @@ return view.extend({
 					luciUpd ? _('Log in') : _('Reload')) ]));
 			if (ok) window.setTimeout(next, 2500);
 		}
-		// Follow the log until it ends (@@RC=) or the installer ends this
-		// session (it reloads rpcd and logs LuCI out): then offer a reload.
+		// Follow the log until it ends (@@RC=). While the router does not
+		// answer (three polls in a row) nothing is known about the update, so
+		// nothing is claimed: the note says so and the page keeps asking.
 		// resumed: an update this page did not start. The log may be an older
 		// run's (one from SSH writes none), so its end is the router's
 		// running flag, and the reload shows how it went.
@@ -322,6 +327,8 @@ return view.extend({
 				if (!document.body.contains(updProg)) { window.clearInterval(t); return; }
 				h.callUpdateLog().then(function(r) {
 					var out = (r && r.output) || '', m = /@@RC=(\d+)/.exec(out), p = progOf(out);
+					if (fails >= 3) dom.content(updNote, E('span', { 'class': 'qos-ex-muted' },
+						resumed ? _('An update is running…') : _('Updating — do not close this page…')));
 					fails = 0;
 					if (resumed) {
 						if (r && r.running) { if (!m) paintProg(p[0], p[1]); return; }
@@ -335,9 +342,8 @@ return view.extend({
 					finish(m[1] === '0' ? _('Update finished.')
 						: _('The update failed (exit %s); its log is on').format(m[1]), m[1] === '0');
 				}).catch(function() {
-					if (++fails < 3) return;
-					window.clearInterval(t);
-					finish(_('The installer reloaded LuCI and ended this session.'), true);
+					if (++fails === 3) dom.content(updNote, E('span', { 'class': 'qos-ex-warn-text' },
+						_('No answer from the router — waiting for it…')));
 				});
 			}, 2000);
 		}

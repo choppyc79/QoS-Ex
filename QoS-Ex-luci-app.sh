@@ -11,12 +11,12 @@
 # world-writable. Pin it before the first write.
 umask 022
 
-VERSION="1.3.9.9"
+VERSION="1.4.0.1"
 # The app's files, and the sha256 of the tarball this installer was released
 # with. tools/mkluci.sh writes the hash. Besides these files, only Leaflet
 # (the map library, install_leaflet) is installed.
 LUCI_TAR="qos-ex-luci.tar.gz"
-LUCI_TAR_SHA="9b17e7b92303316b142bfeb5fa921d45313d6ba6202094646ff6b78fd59180ac"
+LUCI_TAR_SHA="05af895cef2c316ed04858cb2b0b270030c0f23993bf926ba209e805753e8972"
 # $VERSION is spliced into sed replacements (qos-ex.css and every view) and into
 # VTOK, which becomes part of every generated filename. A '/' would terminate
 # the s-command and an '&' would expand to the whole match, so assert the
@@ -619,7 +619,8 @@ install_uninstall_stub() {
 	"admin/network/qos-ex/system":                { "action": { "type": "alias", "path": "admin/status/overview" } },
 	"admin/network/qos-ex/system/status":         { "action": { "type": "alias", "path": "admin/status/overview" } },
 	"admin/network/qos-ex/system/logs":           { "action": { "type": "alias", "path": "admin/status/overview" } },
-	"admin/network/qos-ex/system/maintenance":    { "action": { "type": "alias", "path": "admin/status/overview" } }
+	"admin/network/qos-ex/system/maintenance":    { "action": { "type": "alias", "path": "admin/status/overview" } },
+	"admin/network/qos-ex/system/autosetup":      { "action": { "type": "alias", "path": "admin/status/overview" } }
 }
 STUBEOF
 	wrote "$MENU_DIR/luci-app-qos-ex.json" || return 1
@@ -645,7 +646,8 @@ uninstall_all() {
 	rm -f  "$ACL_DIR/luci-app-qos-ex.json"
 	rm -f  "$RPCD_DIR/qos-ex"
 	rm -f  /usr/libexec/qos-ex-menu-refresh /tmp/qos-ex-menu-refresh.log
-	rm -f  /var/run/qos-ex-update.json /var/log/qos-ex-update.log /var/log/qos-ex-uninstall.log \
+	rm -f  /var/run/qos-ex-update.json /var/run/qos-ex-update-run.lock \
+	       /var/log/qos-ex-update.log /var/log/qos-ex-uninstall.log \
 	       /tmp/qos-ex-update.json /tmp/qos-ex-update.log
 	rm -rf "$RES_DIR"
 	rm -rf "$VIEW_DIR"

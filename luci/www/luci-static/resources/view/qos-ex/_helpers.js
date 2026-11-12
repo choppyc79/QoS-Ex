@@ -513,6 +513,9 @@ return baseclass.extend({
 	callLive:      rpc.declare({ object: 'qos-ex', method: 'live' }),
 	callNfterr:    cacheTap('nfterr', rpc.declare({ object: 'qos-ex', method: 'nfterr' })),
 	callLogdump:   rpc.declare({ object: 'qos-ex', method: 'logdump',   params: [ 'lines', 'src' ] }),
+	// System > Logs in one call: the three logs (lines each, 0 = left out)
+	// and both nft errors.
+	callLogs:      rpc.declare({ object: 'qos-ex', method: 'logs',      params: [ 'shaper', 'pf', 'update' ] }),
 	callDebug:     rpc.declare({ object: 'qos-ex', method: 'debug'      }),
 	callRuleset:   rpc.declare({ object: 'qos-ex', method: 'ruleset'    }),
 	callConntrack: rpc.declare({ object: 'qos-ex', method: 'conntrack', params: [ 'max' ] }),
@@ -520,7 +523,9 @@ return baseclass.extend({
 	callNetDevices: rpc.declare({ object: 'luci-rpc', method: 'getNetworkDevices', expect: { '': {} } }),
 	callAction:    rpc.declare({ object: 'qos-ex', method: 'action',    params: [ 'verb' ] }),
 	callPfStatus:  cacheTap('pf_status',  rpc.declare({ object: 'qos-ex', method: 'pf_status'  })),
-	callPfServers: cacheTap('pf_servers', rpc.declare({ object: 'qos-ex', method: 'pf_servers' })),
+	// peek = 1 (LuCI's Status tile): the answer without telling the daemon
+	// a page is watching.
+	callPfServers: cacheTap('pf_servers', rpc.declare({ object: 'qos-ex', method: 'pf_servers', params: [ 'peek' ] })),
 	callPfTelemetry: rpc.declare({ object: 'qos-ex', method: 'pf_telemetry', params: [ 'ip' ] }),
 	callPfAction:  rpc.declare({ object: 'qos-ex', method: 'pf_action', params: [ 'verb', 'ip', 'ms' ] }),
 	callPfText:    rpc.declare({ object: 'qos-ex', method: 'pf_text',   params: [ 'verb', 'ip' ] }),
@@ -742,6 +747,23 @@ return baseclass.extend({
 		return E('a', { 'class': 'qx-go', 'href': this.tabUrl(path) }, label + ' →');
 	},
 
+	// The config again, for a page that polls (edits on other tabs or over
+	// SSH show without a reload). uci.get() answers nothing between the
+	// unload and the end of the load, and a paint in that time drew the
+	// defaults ("Get started", no devices, Watch only). uciBusy() is true for
+	// that time: a paint that reads the config returns, and the paint its
+	// caller makes after the reload draws.
+	uciReload: function() {
+		var self = this;
+		self._uciBusy = (self._uciBusy || 0) + 1;
+		uci.unload('qos-ex');
+		return uci.load('qos-ex').catch(function() { return null; }).then(function(r) {
+			self._uciBusy--;
+			return r;
+		});
+	},
+	uciBusy: function() { return (this._uciBusy || 0) > 0; },
+
 	// The Ping Filter mode settings from UCI, in the pf_servers reply's
 	// shape. Each mode keeps its own number there; the daemon ignores the
 	// other one. Callers have uci.load('qos-ex') done.
@@ -822,6 +844,10 @@ return baseclass.extend({
 	// hint whose IPv4 addresses all sit in a subnet of the WAN device. wan =
 	// that device, or a promise of it; '' leaves the WAN side in. If
 	// getNetworkDevices fails, every hint stays.
+	// A hint under one of the router's MACs is the router only while it holds
+	// no IPv4 address but the router's own: a WAN port that clones a LAN
+	// device's MAC shares that device's entry, and the device stays, without
+	// the router's addresses.
 	lanHints: function(wan) {
 		function v4(s) {
 			var p = String(s || '').split('.'), n = 0;
@@ -837,10 +863,13 @@ return baseclass.extend({
 			this.callNetDevices().catch(function() { return {}; }),
 			Promise.resolve(wan).catch(function() { return ''; })
 		]).then(function(r) {
-			var hints = r[0] || {}, devs = r[1] || {}, own = {}, nets = [], out = {};
+			var hints = r[0] || {}, devs = r[1] || {}, own = {}, mine = {}, nets = [], out = {};
 			Object.keys(devs).forEach(function(name) {
 				var d = devs[name] || {}, m = String(d.mac || '').toLowerCase();
 				if (m && m !== '00:00:00:00:00:00') own[m] = true;
+				[].concat(d.ipaddrs || [], d.ip6addrs || []).forEach(function(a) {
+					if (a && a.address) mine[String(a.address).toLowerCase()] = true;
+				});
 				if (r[2] && name === r[2]) [].concat(d.ipaddrs || []).forEach(function(a) {
 					var ip = v4(a && a.address), mask = v4(a && a.netmask);
 					if (ip !== null && mask) nets.push([ ip, mask ]);
@@ -850,9 +879,15 @@ return baseclass.extend({
 				var n = v4(ip);
 				return n !== null && nets.some(function(w) { return ((n ^ w[0]) & w[1]) === 0; });
 			}
+			function notMine(ip) { return !mine[String(ip).toLowerCase()]; }
 			Object.keys(hints).forEach(function(mac) {
 				var x = hints[mac] || {}, a4 = [].concat(x.ipaddrs || x.ipv4 || []);
-				if (own[String(mac).toLowerCase()]) return;
+				if (own[String(mac).toLowerCase()]) {
+					a4 = a4.filter(notMine);
+					if (!a4.length) return;
+					x = Object.assign({}, x, { ipaddrs: a4,
+						ip6addrs: [].concat(x.ip6addrs || x.ipv6 || []).filter(notMine) });
+				}
 				if (nets.length && a4.length && a4.every(wanSide)) return;
 				out[mac] = x;
 			});
@@ -1321,9 +1356,9 @@ return baseclass.extend({
 	//
 	// The stand-in still has the shape callers expect, so no parser needs
 	// to change -- the reason rides along in _err. Repeat failures on a
-	// poll tick are collapsed to one banner per distinct message per
-	// minute, so a backend that is down does not produce a banner every
-	// five seconds.
+	// poll tick are collapsed to one banner per distinct message (see
+	// _rpcGripe), so a backend that is down does not produce a banner
+	// every five seconds.
 	// Counters and tc in one call (Stats, Overview): resolves
 	// [ counters reply (rpcSafe-shaped, _err on failure), tc reply | null ].
 	// A counters reply without the @@COUNTERS@@ block goes through
@@ -1359,13 +1394,16 @@ return baseclass.extend({
 		return this.rpcSafe(call(), empty);
 	},
 
+	// One banner per message: none while the last one is still on the page
+	// (an error banner stays until it is dismissed, so a failing poll added
+	// one a minute for as long as the page was open), and a dismissed one
+	// comes back after a minute at the earliest.
 	_rpcGripe: function(msg) {
 		var now = Date.now();
 		if (!window.__qosExRpcSeen) window.__qosExRpcSeen = Object.create(null);
-		var seen = window.__qosExRpcSeen;
-		if (seen[msg] && (now - seen[msg]) < 60000) return;
-		seen[msg] = now;
-		this.notifyErr(_('QoS-Ex backend call failed: ') + msg);
+		var seen = window.__qosExRpcSeen, was = seen[msg];
+		if (was && ((was.node && was.node.isConnected) || (now - was.t) < 60000)) return;
+		seen[msg] = { t: now, node: this.notifyErr(_('QoS-Ex backend call failed: ') + msg) };
 	},
 
 	// Register a poll handler that unregisters ITSELF once its anchor node
@@ -1674,6 +1712,9 @@ return baseclass.extend({
 		}
 		function paint(st) {
 			var out = [];
+			// The Ping Filter pill is read from the config: not while a poll
+			// reads it again (uciReload), or the pill went and came back.
+			if (kind === 'pf' && self.uciBusy()) return;
 			if (kind === 'pf') {
 				if (st.pf_on === '1' && uci.get('qos-ex', 'pingfilter'))
 					out.push(pill(self.pfModeText(self.pfUci(), true), _('Mode and limit')));
@@ -1986,8 +2027,7 @@ return baseclass.extend({
 			self.callPfAction(verb, arg, n).then(function(r) {
 				if (!(r && r.ok)) self.notifyErr(_('Mode change failed'));
 			}, function() { self.notifyErr(_('Mode change failed')); }).then(function() {
-				uci.unload('qos-ex');
-				return uci.load('qos-ex').catch(function() {});
+				return self.uciReload();
 			}).then(function() {
 				busy = false; paint();
 				if (o.done) o.done();
@@ -2021,6 +2061,9 @@ return baseclass.extend({
 				on && ctl ? E('div', { 'class': 'qx-mode-ctl' }, ctl) : '' ]);
 		}
 		function paint() {
+			// Not from a config that is being read again: pfUci() would give
+			// the defaults (Watch only).
+			if (self.uciBusy()) return;
 			var c = self.pfUci(), thr = c.threshold, km = c.home_radius_km, ctc = c.ping_catch;
 			var cur = c.block_mode === 'distance' ? 'distance' : thr > 0 ? 'ping' : 'watch';
 			var s = JSON.stringify([ cur, thr, km, ctc, busy ]);
