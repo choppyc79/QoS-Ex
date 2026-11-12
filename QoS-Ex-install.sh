@@ -1,8 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# QoS-Ex bootstrap: fetch the scripts and the LuCI app's files from GitHub
-# into /root and run the installer. Safe to re-run to upgrade; also works
-# piped (wget ... | sh).
+# QoS-Ex bootstrap: fetch the scripts, the LuCI app's files and the check
+# script (qos-ex-check.sh) from GitHub into /root and run the installer.
+# Safe to re-run to upgrade; also works piped (wget ... | sh).
 # Source order: private (a token, when there is one), then public, then
 # install. The result -- and why, when it fails -- goes to the QoS-Ex log
 # (/var/log/qos-ex.log, the app's Logs page) and to syslog.
@@ -273,8 +273,16 @@ main() {
 	# is being pushed does not match it and is refused, so /root never gets
 	# a mixed set. A ref from before the manifest existed has none: said,
 	# and the files are used as they are.
+	CHECK=""
 	if _get SHA256SUMS "$TMP/SHA256SUMS"; then
-		for f in $FILES $LIBS $DATA; do
+		# The check script (sh /root/qos-ex-check.sh) comes with a ref whose
+		# manifest lists it: one from before shaper 3.2.1.8 has none.
+		if [ -n "$(awk '$2 == "qos-ex-check.sh"' "$TMP/SHA256SUMS")" ]; then
+			CHECK="qos-ex-check.sh"
+			_get "$CHECK" "$TMP/$CHECK" ||
+				die "download failed: $CHECK (${GET_ERR:-no reply}) - network dropped, or GitHub rate limit"
+		fi
+		for f in $FILES $LIBS $DATA $CHECK; do
 			_want="$(awk -v f="$f" '$2 == f { print $1; exit }' "$TMP/SHA256SUMS")"
 			_have="$(sha256sum "$TMP/$f" 2>/dev/null | cut -d' ' -f1)"
 			[ -n "$_want" ] && [ "$_want" = "$_have" ] ||
@@ -325,10 +333,10 @@ main() {
 	esac
 	STAGE="$(mktemp -d "$DEST/.qos-ex-new.XXXXXX")" && mkdir -p "$STAGE/lib" "$DEST/lib" ||
 		die "cannot write $DEST"
-	for f in $FILES $LIBS $DATA; do
+	for f in $FILES $LIBS $DATA $CHECK; do
 		cp "$TMP/$f" "$STAGE/$f" || die "cannot write $DEST (flash full?) - nothing changed"
 	done
-	for f in $FILES; do
+	for f in $FILES $CHECK; do
 		chmod 755 "$STAGE/$f" && mv -f "$STAGE/$f" "$DEST/$f" || die "cannot write $DEST/$f"
 	done
 	for f in $LIBS $DATA; do
@@ -338,6 +346,8 @@ main() {
 	# The old name, once this one is in place (a ref from before the rename
 	# has no QoS-Ex-install.sh and never gets here).
 	[ "$OLDNAME" = 1 ] || rm -f "$DEST/install.sh"
+	# A ref with no check script leaves none from another ref.
+	[ -n "$CHECK" ] || rm -f "$DEST/qos-ex-check.sh"
 	_got=$(_vl "$DEST")
 	_ok "downloaded and checked: $_got"
 
