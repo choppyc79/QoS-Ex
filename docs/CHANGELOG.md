@@ -5,7 +5,16 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.3.9.9 · Ping Filter 2.0.9.4 · shaper 3.2.1.7**
+Current: **LuCI app 1.4.0.0 · Ping Filter 2.0.9.4 · shaper 3.2.1.7**
+
+## LuCI app 1.4.0.0
+
+- Fixed: a second **Update now** in the first seconds of an update (another tab, another person) could start as well. It stopped at once, but it wrote its failure into the update log, so the page that had started the update showed "The update failed" while that update went on and finished. Only one update starts now, and the second page shows the first one running.
+- Fixed: while the router did not answer, a QoS-Ex page added a red "QoS-Ex backend call failed" banner every minute and kept them all. There is one banner now, and a new one only after you dismiss it.
+- Fixed: a LuCI login with no access to QoS-Ex got that red banner on LuCI's own **Status → Overview** page every minute, with a QoS-Ex box that read Off. Such a login no longer gets the box or the banner.
+- Fixed: where the router's WAN port uses the MAC address of a device on your network (a cloned MAC), that device was missing from **Setup → Devices & Ports** and from Auto Setup's **② Devices** since 1.3.9.9. It is listed again.
+- Fixed: **System → Maintenance** and **System → Logs** did not notice that Auto Setup had been finished or reopened in another browser tab, so the Auto Setup tab could still be missing, or still be there, on the page opened after them.
+- Fixed: **Restore settings** with a file that has a quote or a backslash in a section line failed without the reason. It now says the file is not a QoS-Ex settings file.
 
 ## LuCI app 1.3.9.9
 
