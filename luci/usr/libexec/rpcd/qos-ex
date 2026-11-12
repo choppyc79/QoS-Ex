@@ -74,13 +74,14 @@ json_err() {
 
 # After the whole config was replaced (reset, import): enable or disable,
 # whichever settings.enabled now says. A plain restart flipped shaping on or
-# off without its side effects (autostart, flow offload).
+# off without its side effects (autostart, flow offload). The value is read
+# as the shaper reads it (_yn in QoS-Ex.sh): a restored file with enabled
+# 'yes' was switched off.
 apply_master() {
-	if [ "$(uci -q get "$UCI_PKG.settings.enabled")" = 1 ]; then
-		run_bounded "$QOS_EX_BIN" enable
-	else
-		run_bounded "$QOS_EX_BIN" disable
-	fi
+	case "$(uci -q get "$UCI_PKG.settings.enabled")" in
+		1|[Yy][Ee][Ss]|[Oo][Nn]|[Tt][Rr][Uu][Ee]|[Ee][Nn][Aa][Bb][Ll][Ee][Dd]) run_bounded "$QOS_EX_BIN" enable ;;
+		*) run_bounded "$QOS_EX_BIN" disable ;;
+	esac
 }
 
 # Run a lifecycle command ($@) but wait for it no longer than rpcd will wait
@@ -298,6 +299,41 @@ emit_text() {
 	printf '"}\n'
 }
 
+# The tail of one log as {"output": ...}, read here: through qos-ex.sh, a poll
+# parsed a 240KB script to run one tail. $1 picks the file from a fixed set,
+# never a caller path: "pf" = the PF log (daemon + actions), "update" = the
+# last update's output (without its @@RC= end marker), anything else = the
+# shaper log. $2 lines, 1..2000; 0 / absent = the last 2000 (through 1.2.0.9
+# that case ran cat, and emit_text kept the FIRST 2000). The tail is cut
+# here, not in the browser: System > Logs shows the last few lines and used
+# to be sent the entire log on every poll tick to do it.
+emit_log() {
+	_ls=$1; _ln=$2
+	case "$_ln" in ''|*[!0-9]*) _ln=0 ;; esac
+	{ [ "$_ln" -ge 1 ] && [ "$_ln" -le 2000 ]; } 2>/dev/null || _ln=2000
+	case "$_ls" in
+		pf)     _lf=/var/log/qos-ex-pf-daemon.log ;;
+		update) _lf=/var/log/qos-ex-update.log ;;
+		*)      _lf=/var/log/qos-ex.log ;;
+	esac
+	if [ ! -s "$_lf" ]; then
+		emit_text echo "(log empty)"
+	elif [ "$_ls" = update ]; then
+		emit_text sh -c 'tail -n "$1" "$2" | sed "/^@@RC=/d"' qos-ex-log "$_ln" "$_lf"
+	else
+		emit_text tail -n "$_ln" "$_lf"
+	fi
+}
+# The last nft load error of each ruleset: plain reads of the two files.
+emit_nfterr() {
+	if [ -f /var/run/qos-ex-nft.err ]; then emit_text cat /var/run/qos-ex-nft.err
+	else emit_text echo "(no recent NFT load error)"; fi
+}
+emit_pf_nfterr() {
+	if [ -f /var/run/qos-ex-pingfilter-nft.err ]; then emit_text cat /var/run/qos-ex-pingfilter-nft.err
+	else emit_text echo "(no recent ping filter NFT error)"; fi
+}
+
 # The speed test's state file, then now=<uptime, s>: its at= is the uptime
 # when it was written, so the page can tell a result under an hour old (the
 # one suggest takes) from an older one.
@@ -384,12 +420,13 @@ case "$1" in
 	"live":         {},
 	"nfterr":       {},
 	"logdump":      { "lines": 0, "src": "" },
+	"logs":         { "shaper": 0, "pf": 0, "update": 0 },
 	"debug":        {},
 	"ruleset":      {},
 	"conntrack":    { "max": 0 },
 	"action":       { "verb": "" },
 	"pf_status":    {},
-	"pf_servers":   {},
+	"pf_servers":   { "peek": false },
 	"pf_telemetry": { "ip": "" },
 	"pf_action":    { "verb": "", "ip": "", "ms": 0 },
 	"pf_text":      { "verb": "", "ip": "" },
@@ -465,39 +502,35 @@ EOL
 				emit_tc
 				echo '}'
 				;;
-			# nfterr and logdump are plain reads of the backend's two files.
-			# Going through qos-ex.sh parsed a 240KB script to run one cat --
-			# every poll tick, for logdump.
-			nfterr)
-				if [ -f /var/run/qos-ex-nft.err ]; then emit_text cat /var/run/qos-ex-nft.err
-				else emit_text echo "(no recent NFT load error)"; fi
-				;;
+			# nfterr and logdump are plain reads of the backend's files
+			# (emit_nfterr, emit_log).
+			nfterr)     emit_nfterr ;;
 			logdump)
-				# Tail here, not in the browser: System > Logs shows the last
-				# few lines and used to be sent the entire log on every poll
-				# tick to do it. 0/absent = the last 2000 (through
-				# 1.2.0.9 that case ran cat, and emit_text kept the FIRST 2000).
-				# src picks the file from a fixed set, never a caller path:
-				# "pf" = the PF log (daemon + actions), "update" = the last
-				# update's output (without its @@RC= end marker), anything
-				# else = the shaper log.
 				read_params
 				json_get_var lines lines 2>/dev/null
 				json_get_var src src 2>/dev/null
-				case "$lines" in ''|*[!0-9]*) lines=0 ;; esac
-				{ [ "$lines" -ge 1 ] && [ "$lines" -le 2000 ]; } 2>/dev/null || lines=2000
-				case "$src" in
-					pf)     _lf=/var/log/qos-ex-pf-daemon.log ;;
-					update) _lf=/var/log/qos-ex-update.log ;;
-					*)      _lf=/var/log/qos-ex.log ;;
-				esac
-				if [ ! -s "$_lf" ]; then
-					emit_text echo "(log empty)"
-				elif [ "$src" = update ]; then
-					emit_text sh -c 'tail -n "$1" "$2" | sed "/^@@RC=/d"' qos-ex-log "$lines" "$_lf"
-				else
-					emit_text tail -n "$lines" "$_lf"
-				fi
+				emit_log "$src" "$lines"
+				;;
+			# System > Logs in one call a poll (it made five): the three log
+			# tails and both nft errors. Each count is 1..200 lines; 0 leaves that
+			# log out (null): the page fetches a longer one with logdump, so this
+			# reply stays far under what one ubus message may hold.
+			logs)
+				read_params
+				printf '{'
+				for _s in shaper pf update; do
+					_n=""; json_get_var _n "$_s" 2>/dev/null
+					case "$_n" in
+						''|*[!0-9]*|0) printf '"%s":null,' "$_s" ;;
+						*)
+							[ "$_n" -le 200 ] 2>/dev/null || _n=200
+							printf '"%s":' "$_s"; emit_log "$_s" "$_n"; printf ','
+							;;
+					esac
+				done
+				printf '"nft":'; emit_nfterr
+				printf ',"pfnft":'; emit_pf_nfterr
+				echo '}'
 				;;
 			debug)      emit_text "$QOS_EX_BIN" debug ;;
 			ruleset)
@@ -848,8 +881,17 @@ EOL
 				# While a page keeps asking, the daemon builds this once per
 				# scan and leaves it in tmpfs; .viewer is how it knows. Used
 				# when it is under a minute old, else built here as before.
+				# peek (LuCI's Status tile): the same answer without that mark.
+				# The mark makes the daemon build this list and its report every
+				# loop for the next 20 s, and the tile renewed it for as long as
+				# LuCI's Status page stayed open.
+				read_params
+				json_get_var peek peek 2>/dev/null
 				_j=/var/run/qos-ex-pingfilter/servers.json
-				[ -d /var/run/qos-ex-pingfilter ] && : > /var/run/qos-ex-pingfilter/.viewer 2>/dev/null
+				case "$peek" in
+					1|true) ;;
+					*) [ -d /var/run/qos-ex-pingfilter ] && : > /var/run/qos-ex-pingfilter/.viewer 2>/dev/null ;;
+				esac
 				out=""
 				[ -s "$_j" ] && [ -n "$(find "$_j" -mmin -1 2>/dev/null)" ] && out=$(cat "$_j" 2>/dev/null)
 				case "$out" in '{'*'}') ;; *) out=$($PFCMD servers 2>/dev/null | grep '^{' | tail -n 1) ;; esac
@@ -869,11 +911,21 @@ EOL
 					printf '{"ip":"","pps":0,"bps":0,"jitter":0,"gap_max":0,"gaps":0,"stall":0,"samples":[]}\n'
 					exit 0
 				fi
-				out=$($PFCMD telemetry "$clean_ip" 2>/dev/null | grep '^{' | tail -n 1)
-				case "$out" in
-					'{'*'}') printf '%s\n' "$out" ;;
-					*) printf '{"ip":"%s","pps":0,"bps":0,"jitter":0,"gap_max":0,"gaps":0,"stall":0,"samples":[]}\n' "$clean_ip" ;;
-				esac
+				# The live row and the sparkline ring are two small files in tmpfs,
+				# read here: through the Ping Filter script, each poll of the
+				# Overview and the Dashboard in a match parsed all 280 KB of it to
+				# print them. The reply is that of its telemetry verb
+				# (pf_telemetry_json in QoS-Ex-PF.sh): keep the two in step.
+				_lv=/var/run/qos-ex-pingfilter/live.tsv; [ -f "$_lv" ] || _lv=/dev/null
+				_rg=/var/run/qos-ex-pingfilter/tele-$clean_ip; [ -f "$_rg" ] || _rg=/dev/null
+				awk -F'	' -v ip="$clean_ip" '
+					function num(v) { return (v ~ /^-?[0-9]+$/) ? v : 0 }
+					$1 == ip { p = $2; b = $3; j = $4; g = $5; n = $6; s = $7; exit }
+					END { printf "{\"ip\":\"%s\",\"pps\":%s,\"bps\":%s,\"jitter\":%s,\"gap_max\":%s,\"gaps\":%s,\"stall\":%s,\"samples\":[", ip, num(p), num(b), num(j), num(g), num(n), num(s) }' "$_lv" 2>/dev/null
+				awk -F'	' 'BEGIN { first = 1 }
+					NF >= 4 { if (!first) printf ","; first = 0
+						printf "{\"ts\":%d,\"pps\":%d,\"bps\":%d,\"jitter\":%d,\"rtt\":%d}", $1, $2, $3, $4, ($5 + 0) }' "$_rg" 2>/dev/null
+				printf ']}\n'
 				;;
 			pf_action)
 				read_params
@@ -960,10 +1012,7 @@ EOL
 					# A plain read of the daemon's error file, as nfterr above:
 					# through the Ping Filter script, System > Logs parsed all of
 					# it on every poll to run one cat.
-					nfterr)
-						if [ -f /var/run/qos-ex-pingfilter-nft.err ]; then emit_text cat /var/run/qos-ex-pingfilter-nft.err
-						else emit_text echo "(no recent ping filter NFT error)"; fi
-						exit 0 ;;
+					nfterr) emit_pf_nfterr; exit 0 ;;
 					*) json_err "bad verb" ;;
 				esac
 				emit_text $PFCMD "$verb"
