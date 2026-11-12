@@ -23,16 +23,17 @@ return baseclass.extend({
 		return uci.load('qos-ex').then(function() {
 			var now = Date.now(), pf = self.pf;
 			if (!self.updT || now - self.updT > 3600000) { self.updT = now; self.updP = h.updAvail(); }
-			// While Ping Filter is off its reply is asked for every sixth poll
-			// only, as on the Overview: each one runs the Ping Filter script.
-			var pfDue = !h.pfReal(pf) || pf.enabled === 1 || pf.enabled === '1' ||
-				!(self.pfSkip = ((self.pfSkip || 0) + 1) % 6);
+			// The Ping Filter's reply every sixth poll only, and asked for with
+			// peek: a plain ask marks a page as watching, and the daemon then
+			// builds its server list and its report every loop, for as long as
+			// LuCI's Status page stayed open.
+			var pfDue = !h.pfReal(pf) || !(self.pfSkip = ((self.pfSkip || 0) + 1) % 6);
 			return Promise.all([
 				null,
 				// A failed call draws no banner on LuCI's own page: the tile
 				// then reads as stopped.
 				h.callCounters().catch(function() { return { output: '' }; }),
-				pfDue ? h.callPfServers().catch(function() { return {}; }) : pf,
+				pfDue ? h.callPfServers(1).catch(function() { return {}; }) : pf,
 				self.updP
 			]);
 		});
