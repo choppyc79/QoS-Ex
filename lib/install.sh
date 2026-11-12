@@ -1102,19 +1102,20 @@ uninstall_all() {
 	fi
 	rm -rf "$NFT_DIR" "$PF_RUN_DIR" "$PF_SIG" "$RELOAD_PEND" "$LOCK_FILE" "$MASTER_LOCK" 2>/dev/null
 	# "$RUN_LOG".*: the trim stages through a mktemp suffix. The rpcd shim's
-	# state cache, update check, run and lock, the LuCI installer's lock, the
-	# speed test's result and lock, and the package's first-run log too.
+	# state cache, update check, run and its two locks, the LuCI installer's
+	# lock, the speed test's result and lock, the package's first-run log and
+	# the check script's report too.
 	rm -f  "$NFT_ERR" "$PF_NFT_ERR" "$RUN_LOG" "$RUN_LOG".* /var/run/qos-ex-state.cache \
 		/var/run/qos-ex-update.json /var/run/qos-ex-update.pid /var/run/qos-ex-act.* \
-		/var/run/qos-ex-update.lock /var/run/qos-ex-luci.lock \
+		/var/run/qos-ex-update.lock /var/run/qos-ex-update-run.lock /var/run/qos-ex-luci.lock \
 		"$AS_RUN" "$AS_RUN.tmp" "$AS_SUGG" "$AS_LOCK" \
-		/var/log/qos-ex-update.log /var/log/qos-ex-pkg-install.log 2>/dev/null
+		/var/log/qos-ex-update.log /var/log/qos-ex-pkg-install.log /tmp/qos-ex-check.txt 2>/dev/null
 	ui_ok "init, hotplug, config, caches and logs removed"
 
 	self="$(resolve_self_path)"
 	rm -f "$QOS_EX_BIN" "$QX_LIB" "$QX_LIVE" 2>/dev/null
 	rmdir "${QX_LIB%/*}" 2>/dev/null
-	rm -f /root/QoS-Ex-PF.sh /root/QoS-Ex-luci-app.sh /root/qos-ex-luci.tar.gz /root/QoS-Ex-install.sh 2>/dev/null
+	rm -f /root/QoS-Ex-PF.sh /root/QoS-Ex-luci-app.sh /root/qos-ex-luci.tar.gz /root/QoS-Ex-install.sh /root/qos-ex-check.sh 2>/dev/null
 	# Generic names: only when they are ours (the fetcher was install.sh until
 	# LuCI 1.2.7.4; the install half carries its own header).
 	grep -q 'QoS-Ex-install\.sh' /root/install.sh 2>/dev/null && rm -f /root/install.sh
@@ -1173,7 +1174,7 @@ sysup_keep_add() {
 	if [ -s "$SYSUP_CONF" ] && [ -n "$(tail -c 1 "$SYSUP_CONF" 2>/dev/null)" ]; then
 		echo "" >> "$SYSUP_CONF"
 	fi
-	for p in /etc/qos-ex/ /root/QoS-Ex.sh /root/lib/install.sh /root/QoS-Ex-PF.sh /root/QoS-Ex-luci-app.sh /root/qos-ex-luci.tar.gz /root/QoS-Ex-install.sh "$SYSUP_HOOK"; do
+	for p in /etc/qos-ex/ /root/QoS-Ex.sh /root/lib/install.sh /root/QoS-Ex-PF.sh /root/QoS-Ex-luci-app.sh /root/qos-ex-luci.tar.gz /root/QoS-Ex-install.sh /root/qos-ex-check.sh "$SYSUP_HOOK"; do
 		grep -qxF "$p" "$SYSUP_CONF" 2>/dev/null || echo "$p" >> "$SYSUP_CONF"
 	done
 }
@@ -1182,7 +1183,8 @@ sysup_keep_del() {
 	local tmp rc
 	tmp=$(mktemp "$SYSUP_CONF.XXXXXX" 2>/dev/null) || return 0
 	grep -vxF -e /etc/qos-ex/ -e /root/QoS-Ex.sh -e /root/lib/install.sh -e /root/QoS-Ex-PF.sh \
-	          -e /root/QoS-Ex-luci-app.sh -e /root/qos-ex-luci.tar.gz -e /root/QoS-Ex-install.sh -e "$SYSUP_HOOK" "$SYSUP_CONF" > "$tmp" 2>/dev/null
+	          -e /root/QoS-Ex-luci-app.sh -e /root/qos-ex-luci.tar.gz -e /root/QoS-Ex-install.sh -e /root/qos-ex-check.sh \
+	          -e "$SYSUP_HOOK" "$SYSUP_CONF" > "$tmp" 2>/dev/null
 	rc=$?
 	# grep exits 1 when it filtered everything (a legitimate empty result);
 	# above that, committing $tmp would wipe the user's other paths.
