@@ -11,12 +11,12 @@
 # world-writable. Pin it before the first write.
 umask 022
 
-VERSION="1.3.9.9"
+VERSION="1.4.0.0"
 # The app's files, and the sha256 of the tarball this installer was released
 # with. tools/mkluci.sh writes the hash. Besides these files, only Leaflet
 # (the map library, install_leaflet) is installed.
 LUCI_TAR="qos-ex-luci.tar.gz"
-LUCI_TAR_SHA="9b17e7b92303316b142bfeb5fa921d45313d6ba6202094646ff6b78fd59180ac"
+LUCI_TAR_SHA="e0401c7b470dfab97a15e21c85d711dc5e32308f484a8dd3881eb04e62371795"
 # $VERSION is spliced into sed replacements (qos-ex.css and every view) and into
 # VTOK, which becomes part of every generated filename. A '/' would terminate
 # the s-command and an '&' would expand to the whole match, so assert the
@@ -645,7 +645,8 @@ uninstall_all() {
 	rm -f  "$ACL_DIR/luci-app-qos-ex.json"
 	rm -f  "$RPCD_DIR/qos-ex"
 	rm -f  /usr/libexec/qos-ex-menu-refresh /tmp/qos-ex-menu-refresh.log
-	rm -f  /var/run/qos-ex-update.json /var/log/qos-ex-update.log /var/log/qos-ex-uninstall.log \
+	rm -f  /var/run/qos-ex-update.json /var/run/qos-ex-update-run.lock \
+	       /var/log/qos-ex-update.log /var/log/qos-ex-uninstall.log \
 	       /tmp/qos-ex-update.json /tmp/qos-ex-update.log
 	rm -rf "$RES_DIR"
 	rm -rf "$VIEW_DIR"
