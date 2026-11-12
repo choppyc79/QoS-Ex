@@ -65,8 +65,9 @@ anything is put in place.
 > ```
 
 **Manual install.** Copy `QoS-Ex.sh`, `QoS-Ex-PF.sh`, `QoS-Ex-luci-app.sh`,
-`QoS-Ex-install.sh` and `qos-ex-luci.tar.gz` to `/root`, and
-`lib/install.sh` to `/root/lib/`, then run `cd /root && sh QoS-Ex.sh install`.
+`QoS-Ex-install.sh`, `qos-ex-check.sh` and `qos-ex-luci.tar.gz` to `/root`,
+and `lib/install.sh` to `/root/lib/`, then run
+`cd /root && sh QoS-Ex.sh install`.
 
 **Your own firmware.** See [BUILD.md](BUILD.md).
 
@@ -200,6 +201,8 @@ its own setup: [PINGFILTER.md](PINGFILTER.md).
 3. Start a large download and open **Live → Stats**. The download fills
    its class, while the delay of Gaming (the Voice tin under CAKE) stays
    flat. That is shaping working.
+4. Over SSH, `sh /root/qos-ex-check.sh` checks the install, the queues and
+   the rules, one PASS or FAIL line each: see [Over SSH](#8-over-ssh).
 
 What each class and mark means: [How QoS-Ex sorts
 traffic](LUCI-GUIDE.md#how-qos-ex-sorts-traffic).
@@ -329,6 +332,22 @@ nft list tables | grep qos_ex # the rule set table
 The download queue is on `ifb-<wan>` (for example
 `tc qdisc show dev ifb-pppoe-wan`), or on the LAN device (`br-lan`) when
 **Download shaped on** is the LAN device.
+
+**Check.**
+
+```sh
+sh /root/qos-ex-check.sh          # read-only: each line is PASS, FAIL, INFO or SKIP
+sh /root/qos-ex-check.sh match    # the same, plus the game's flows: run it during a match
+```
+
+The installer keeps this script in `/root`, fetched with the version it
+checks. It compares what is installed with the copies in `/root`, then
+checks the queues, the rules, the DSCP restore and the Ping Filter. The
+report is also saved to `/tmp/qos-ex-check.txt`. It holds LAN and
+game-server addresses and log lines, so read it before you post it. A test
+named after the command (`reload`, `restart`, `redial` and others) changes
+something for a moment: the list, with what each one does, is at the top
+of the script.
 
 **Logs.**
 
