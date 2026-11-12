@@ -374,10 +374,9 @@ return view.extend({
 		var view = this, j = view.pf || {};
 		var pfDue = !h.pfReal(j) || (j.enabled === 1 || j.enabled === '1') ||
 			!(view.pfSkip = ((view.pfSkip || 0) + 1) % 6);
-		uci.unload('qos-ex');
 		var old = h.parseState(view.stOut).state;
 		return Promise.all([
-			uci.load('qos-ex').catch(function() { return null; }),
+			h.uciReload(),
 			h.rpcSafe(h.callState()),
 			pfDue ? h.rpcSafe(h.callPfServers(), { servers: [] }) : null,
 			view.sample(),
@@ -467,6 +466,9 @@ return view.extend({
 	},
 
 	paint: function() {
+		// The poll is reading the config again: its own paint, at its end,
+		// draws (this one would show the cards' empty states for a moment).
+		if (h.uciBusy()) return;
 		var view = this, b = view.boxes, tv = view.tv;
 		var st = h.parseState(view.stOut).state, fu = view.full || {};
 		var enabled = (st.enabled || uci.get('qos-ex', 'settings', 'enabled') || '0') === '1';
