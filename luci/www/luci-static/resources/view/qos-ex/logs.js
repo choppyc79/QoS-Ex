@@ -15,6 +15,8 @@
 // Line counts on offer. The tail happens in the shim (logdump caps at 2000),
 // so a bigger pick only costs what it shows.
 var SIZES = [ 50, 200, 1000 ];
+// Up to this many lines a log, the three logs come in one call.
+var BULK = 200;
 
 function noErr(t) { return !t || /^\((no recent|no output|log empty)/.test(t) || /^\s*$/.test(t) || /not installed/i.test(t); }
 
@@ -22,19 +24,32 @@ return view.extend({
 	// The config is for h.pageHead's check of the menu this browser tab
 	// kept; the page opens without it.
 	load: function() {
+		this.n = { shaper: SIZES[0], pf: SIZES[0], update: SIZES[0] };
 		return Promise.all([
-			h.rpcSafe(h.callLogdump(SIZES[0], 'shaper')),
-			h.rpcSafe(h.callLogdump(SIZES[0], 'pf')),
-			h.rpcSafe(h.callLogdump(SIZES[0], 'update')),
-			h.rpcSafe(h.callNfterr()),
-			h.rpcSafe(h.callPfText('nfterr', ''), {}),
+			this.fetch(),
 			uci.load('qos-ex').catch(function() { return null; })
 		]);
 	},
 
+	// The three logs and both nft errors: { shaper, pf, update, nft, pfnft },
+	// each a reply or nothing. One call brings them (a poll made five); a
+	// log shown at more than BULK lines comes by its own call, so that one
+	// reply stays far under what a ubus message may hold.
+	fetch: function() {
+		var n = this.n;
+		function few(s) { return n[s] > BULK ? 0 : n[s]; }
+		function own(s) { return n[s] > BULK ? h.rpcSafe(h.callLogdump(n[s], s)) : null; }
+		return Promise.all([
+			h.rpcSafe(h.callLogs(few('shaper'), few('pf'), few('update')), {}),
+			own('shaper'), own('pf'), own('update')
+		]).then(function(r) {
+			var a = r[0] || {};
+			return { shaper: r[1] || a.shaper, pf: r[2] || a.pf, update: r[3] || a.update, nft: a.nft, pfnft: a.pfnft };
+		});
+	},
+
 	render: function(loaded) {
-		var view = this;
-		view.n = { shaper: SIZES[0], pf: SIZES[0], update: SIZES[0] };
+		var view = this, first = loaded[0] || {};
 		// Detached-at-first-paint refs; later writes re-resolve by id (an SPA
 		// re-render detaches the first tree).
 		view.el = {};
@@ -78,10 +93,10 @@ return view.extend({
 			logCard('pf', _('Ping Filter log'), '/var/log/qos-ex-pf-daemon.log · ' + _('daemon + actions')),
 			logCard('update', _('Update log'), '/var/log/qos-ex-update.log · ' + _('the last update'))
 		]);
-		view.put('shaper', loaded[0]);
-		view.put('pf', loaded[1]);
-		view.put('update', loaded[2]);
-		view.errs(loaded[3], loaded[4]);
+		view.put('shaper', first.shaper);
+		view.put('pf', first.pf);
+		view.put('update', first.update);
+		view.errs(first.nft, first.pfnft);
 		h.pollWhile(head, function() { return view.poll(); });
 		return page;
 	},
@@ -136,10 +151,12 @@ return view.extend({
 
 	poll: function() {
 		var view = this;
-		return Promise.all([
-			view.pull('shaper'), view.pull('pf'), view.pull('update'),
-			h.rpcSafe(h.callNfterr()), h.rpcSafe(h.callPfText('nfterr', ''), {})
-		]).then(function(r) { view.errs(r[3], r[4]); });
+		return view.fetch().then(function(d) {
+			view.put('shaper', d.shaper);
+			view.put('pf', d.pf);
+			view.put('update', d.update);
+			view.errs(d.nft, d.pfnft);
+		});
 	},
 
 	handleSaveApply: null,
