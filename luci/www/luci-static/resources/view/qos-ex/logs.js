@@ -1,5 +1,6 @@
 'use strict';
 'require view';
+'require uci';
 'require ui';
 'require dom';
 'require view.qos-ex._helpers as h';
@@ -18,13 +19,16 @@ var SIZES = [ 50, 200, 1000 ];
 function noErr(t) { return !t || /^\((no recent|no output|log empty)/.test(t) || /^\s*$/.test(t) || /not installed/i.test(t); }
 
 return view.extend({
+	// The config is for h.pageHead's check of the menu this browser tab
+	// kept; the page opens without it.
 	load: function() {
 		return Promise.all([
 			h.rpcSafe(h.callLogdump(SIZES[0], 'shaper')),
 			h.rpcSafe(h.callLogdump(SIZES[0], 'pf')),
 			h.rpcSafe(h.callLogdump(SIZES[0], 'update')),
 			h.rpcSafe(h.callNfterr()),
-			h.rpcSafe(h.callPfText('nfterr', ''), {})
+			h.rpcSafe(h.callPfText('nfterr', ''), {}),
+			uci.load('qos-ex').catch(function() { return null; })
 		]);
 	},
 
