@@ -64,7 +64,13 @@ in_range() {
 	return 0
 }
 
-json_err() { printf '{"error":"%s"}\n' "$1"; exit 0; }
+# The text goes into a JSON string as it is, so a quote, a backslash or a
+# control character in it is dropped first. The text can come from a file:
+# cfg_import names the section type it refused.
+json_err() {
+	printf '{"error":"%s"}\n' "$(printf '%s' "$1" | tr -d '"\\\001-\037')"
+	exit 0
+}
 
 # After the whole config was replaced (reset, import): enable or disable,
 # whichever settings.enabled now says. A plain restart flipped shaping on or
@@ -166,13 +172,22 @@ upd_iref() {
 	_r=""; [ -r /etc/qos-ex/installed-ref ] && read -r _r < /etc/qos-ex/installed-ref
 	case "$_r" in dev) echo dev ;; *) echo main ;; esac
 }
+# update_run holds this lock from its first step, through the downloads,
+# and hands it to its job, which keeps it to the end: one start at a time.
+UPD_RUN_LOCK=/var/run/qos-ex-update-run.lock
 # An update is running: the Maintenance job (its pidfile names a live
 # process that is the job: the pidfile outlives a killed one, and its PID
-# can be reused) or QoS-Ex-install.sh from SSH (it holds the lock).
+# can be reused), QoS-Ex-install.sh from SSH (it holds its own lock) or an
+# update_run that has not started its job yet (it holds UPD_RUN_LOCK).
 upd_busy() {
 	_op=""; [ -s /var/run/qos-ex-update.pid ] && read -r _op < /var/run/qos-ex-update.pid
 	case "$_op" in ''|*[!0-9]*) ;; *) grep -q qos-ex-update "/proc/$_op/cmdline" 2>/dev/null && return 0 ;; esac
-	command -v flock >/dev/null 2>&1 && ! flock -n /var/run/qos-ex-update.lock true 2>/dev/null
+	command -v flock >/dev/null 2>&1 || return 1
+	# Shared locks: two pages that look at the same moment do not take each
+	# other for an update.
+	flock -s -n /var/run/qos-ex-update.lock true 2>/dev/null &&
+		flock -s -n "$UPD_RUN_LOCK" true 2>/dev/null && return 1
+	return 0
 }
 
 # Emit a JSON array of {ip,country,city,ping,lat,lon,ts} for a
@@ -672,6 +687,17 @@ EOL
 			update_run)
 				_lg=/var/log/qos-ex-update.log; _pid=/var/run/qos-ex-update.pid
 				upd_busy && json_err "an update is already running"
+				# One start at a time: the lock is taken before the downloads and
+				# goes on to the job, which keeps it to its end (the installer runs
+				# without it). A second Update now during the downloads used to
+				# start a second job: that one failed on the installer's lock and
+				# wrote its failure over the first one's log. The second try, a
+				# second later: a page's update_log holds the lock (shared) for a
+				# moment while it looks (upd_busy).
+				if command -v flock >/dev/null 2>&1 && ( : >>"$UPD_RUN_LOCK" ) 2>/dev/null; then
+					exec 7>>"$UPD_RUN_LOCK"
+					flock -n 7 || { sleep 1; flock -n 7; } || json_err "an update is already running"
+				fi
 				_d=$(mktemp -d /tmp/qos-ex-up.XXXXXX) || upd_fail "mktemp failed"
 				# Private (the saved token), then public.
 				_ok=0; _why=""; _src=""
@@ -702,7 +728,7 @@ EOL
 				# sessions end 8 s after @@RC=, once the page has shown the end.
 				_ss=""; command -v setsid >/dev/null 2>&1 && _ss=setsid
 				$_ss sh -c 'echo $$ > "$2"; rm -f /var/run/qos-ex-logout
-					QOS_EX_KEEP_SESSIONS=1 sh "$1/QoS-Ex-install.sh" -b "$3"; rc=$?
+					QOS_EX_KEEP_SESSIONS=1 sh "$1/QoS-Ex-install.sh" -b "$3" 7>&-; rc=$?
 					[ "$rc" = 0 ] || { echo "$(date "+%Y-%m-%d %H:%M:%S") [ERR ] update: FAILED (exit $rc) - full output in /var/log/qos-ex-update.log (System > Maintenance)" >> /var/log/qos-ex.log; logger -t QoS-Ex "update: FAILED (exit $rc) - see /var/log/qos-ex-update.log"; }
 					echo "@@RC=$rc"; rm -rf "$1"
 					if [ -e /var/run/qos-ex-logout ]; then
