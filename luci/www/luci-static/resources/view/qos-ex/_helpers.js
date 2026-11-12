@@ -513,6 +513,9 @@ return baseclass.extend({
 	callLive:      rpc.declare({ object: 'qos-ex', method: 'live' }),
 	callNfterr:    cacheTap('nfterr', rpc.declare({ object: 'qos-ex', method: 'nfterr' })),
 	callLogdump:   rpc.declare({ object: 'qos-ex', method: 'logdump',   params: [ 'lines', 'src' ] }),
+	// System > Logs in one call: the three logs (lines each, 0 = left out)
+	// and both nft errors.
+	callLogs:      rpc.declare({ object: 'qos-ex', method: 'logs',      params: [ 'shaper', 'pf', 'update' ] }),
 	callDebug:     rpc.declare({ object: 'qos-ex', method: 'debug'      }),
 	callRuleset:   rpc.declare({ object: 'qos-ex', method: 'ruleset'    }),
 	callConntrack: rpc.declare({ object: 'qos-ex', method: 'conntrack', params: [ 'max' ] }),
@@ -520,7 +523,9 @@ return baseclass.extend({
 	callNetDevices: rpc.declare({ object: 'luci-rpc', method: 'getNetworkDevices', expect: { '': {} } }),
 	callAction:    rpc.declare({ object: 'qos-ex', method: 'action',    params: [ 'verb' ] }),
 	callPfStatus:  cacheTap('pf_status',  rpc.declare({ object: 'qos-ex', method: 'pf_status'  })),
-	callPfServers: cacheTap('pf_servers', rpc.declare({ object: 'qos-ex', method: 'pf_servers' })),
+	// peek = 1 (LuCI's Status tile): the answer without telling the daemon
+	// a page is watching.
+	callPfServers: cacheTap('pf_servers', rpc.declare({ object: 'qos-ex', method: 'pf_servers', params: [ 'peek' ] })),
 	callPfTelemetry: rpc.declare({ object: 'qos-ex', method: 'pf_telemetry', params: [ 'ip' ] }),
 	callPfAction:  rpc.declare({ object: 'qos-ex', method: 'pf_action', params: [ 'verb', 'ip', 'ms' ] }),
 	callPfText:    rpc.declare({ object: 'qos-ex', method: 'pf_text',   params: [ 'verb', 'ip' ] }),
@@ -741,6 +746,23 @@ return baseclass.extend({
 	go: function(path, label) {
 		return E('a', { 'class': 'qx-go', 'href': this.tabUrl(path) }, label + ' →');
 	},
+
+	// The config again, for a page that polls (edits on other tabs or over
+	// SSH show without a reload). uci.get() answers nothing between the
+	// unload and the end of the load, and a paint in that time drew the
+	// defaults ("Get started", no devices, Watch only). uciBusy() is true for
+	// that time: a paint that reads the config returns, and the paint its
+	// caller makes after the reload draws.
+	uciReload: function() {
+		var self = this;
+		self._uciBusy = (self._uciBusy || 0) + 1;
+		uci.unload('qos-ex');
+		return uci.load('qos-ex').catch(function() { return null; }).then(function(r) {
+			self._uciBusy--;
+			return r;
+		});
+	},
+	uciBusy: function() { return (this._uciBusy || 0) > 0; },
 
 	// The Ping Filter mode settings from UCI, in the pf_servers reply's
 	// shape. Each mode keeps its own number there; the daemon ignores the
@@ -1690,6 +1712,9 @@ return baseclass.extend({
 		}
 		function paint(st) {
 			var out = [];
+			// The Ping Filter pill is read from the config: not while a poll
+			// reads it again (uciReload), or the pill went and came back.
+			if (kind === 'pf' && self.uciBusy()) return;
 			if (kind === 'pf') {
 				if (st.pf_on === '1' && uci.get('qos-ex', 'pingfilter'))
 					out.push(pill(self.pfModeText(self.pfUci(), true), _('Mode and limit')));
@@ -2002,8 +2027,7 @@ return baseclass.extend({
 			self.callPfAction(verb, arg, n).then(function(r) {
 				if (!(r && r.ok)) self.notifyErr(_('Mode change failed'));
 			}, function() { self.notifyErr(_('Mode change failed')); }).then(function() {
-				uci.unload('qos-ex');
-				return uci.load('qos-ex').catch(function() {});
+				return self.uciReload();
 			}).then(function() {
 				busy = false; paint();
 				if (o.done) o.done();
@@ -2037,6 +2061,9 @@ return baseclass.extend({
 				on && ctl ? E('div', { 'class': 'qx-mode-ctl' }, ctl) : '' ]);
 		}
 		function paint() {
+			// Not from a config that is being read again: pfUci() would give
+			// the defaults (Watch only).
+			if (self.uciBusy()) return;
 			var c = self.pfUci(), thr = c.threshold, km = c.home_radius_km, ctc = c.ping_catch;
 			var cur = c.block_mode === 'distance' ? 'distance' : thr > 0 ? 'ping' : 'watch';
 			var s = JSON.stringify([ cur, thr, km, ctc, busy ]);
