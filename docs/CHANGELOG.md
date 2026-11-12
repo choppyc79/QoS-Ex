@@ -5,7 +5,17 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.0 · Ping Filter 2.0.9.4 · shaper 3.2.1.7**
+Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.4 · shaper 3.2.1.7**
+
+## LuCI app 1.4.0.1
+
+- Fixed: while the Overview or the Ping Filter Dashboard refreshed, a card could show its empty state for a moment (no gaming devices, the setup card, Watch only), and the mode in the banner could blink.
+- Fixed: when the router stopped answering during an update, **System → Maintenance** showed 100% and "Update complete". It now says there is no answer, keeps asking, and carries on when the router answers again.
+- Fixed: **Restore settings** with a file that has `enabled 'yes'` (or `on`, `true`) switched shaping off. The value is read as the shaper reads it.
+- Fixed: after an uninstall, the old address `…/qos-ex/system/autosetup` gave "No page is registered". It opens Status → Overview, like the other QoS-Ex addresses.
+- Changed: **System → Logs** asks the router once a refresh, not five times. A log shown at 1000 lines is one call more.
+- Changed: the Now playing graph on the Overview and the Ping Filter Dashboard no longer runs the Ping Filter script on every refresh during a match: the web app reads its two small files itself.
+- Changed: the QoS-Ex box on LuCI's **Status → Overview** refreshes its Ping Filter figures every 30 seconds, was every 5. It used to keep the Ping Filter building its server list every second for as long as that page stayed open.
 
 ## LuCI app 1.4.0.0
 
