@@ -1,5 +1,6 @@
 'use strict';
 'require view';
+'require uci';
 'require ui';
 'require dom';
 'require view.qos-ex._helpers as h';
@@ -12,10 +13,13 @@
 return view.extend({
 	// Live replies, not the last-known ones (h.loadC): this page renders
 	// once, and after Update now it reloads to show the new versions.
+	// The config is for h.pageHead's check of the menu this browser tab
+	// kept; the page opens without it.
 	load: function() {
 		return Promise.all([
 			h.rpcSafe(h.callState()),
-			h.rpcSafe(h.callPfStatus(), {})
+			h.rpcSafe(h.callPfStatus(), {}),
+			uci.load('qos-ex').catch(function() { return null; })
 		]);
 	},
 
