@@ -21,7 +21,7 @@
 # Software Foundation, either version 3 of the License, or (at your option)
 # any later version.  See <https://www.gnu.org/licenses/> for details.
 
-VERSION="3.2.1.8"
+VERSION="3.2.1.9"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="QoS-Ex"
@@ -4886,6 +4886,17 @@ qos_ex_debug() {
 	echo "$(_argc $LOWPRIO_MAC) by MAC, $(_argc $LOWPRIO_IP4) by IPv4, $(_argc $LOWPRIO_IP6) by IPv6"
 	echo "--- settings (changed from the defaults, parts in use; home location redacted) ---"
 	debug_settings
+	# The router's rating and the last speed test, as Auto Setup has them
+	# (the probe's own key names; mhz=0 = the CPU reports no speed).
+	echo "--- auto setup (router rating, last speed test) ---"
+	_as_probe 2>/dev/null
+	echo "tier=$AS_TIER cores=$AS_CORES mhz=$AS_MHZ mem_mb=$AS_MEM_MB arch=$AS_ARCH wan_speed=$AS_SPEED wan_rxq=$AS_RXQ wan_txq=$AS_TXQ packet_steering=${AS_STEER:-default}"
+	if [ -r "$AS_RUN" ]; then
+		grep -E '^(phase|down_kbps|up_kbps|ping_idle|ping_down|ping_up|cpu_down|sirq_down|cpu_up|sirq_up|limit_down|limit_up|streams|secs)=' "$AS_RUN" | tr '\n' ' '
+		echo
+	else
+		echo "(no speed test since boot)"
+	fi
 	echo "--- flow offloading ---"
 	echo "software: $(uci -q get firewall.@defaults[0].flow_offloading || echo 0)  hardware: $(uci -q get firewall.@defaults[0].flow_offloading_hw || echo 0)"
 	echo "--- tc qdisc ($WAN + $IFB) ---"
