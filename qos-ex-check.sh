@@ -1,8 +1,9 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
 # QoS-Ex check: does what is installed work as this version should?
-# QoS-Ex-install.sh keeps this file as /root/qos-ex-check.sh, fetched with the
-# scripts it checks. Run as root on the router:
+# A testing tool: on a router that follows the dev branch, QoS-Ex-install.sh
+# keeps this file as /root/qos-ex-check.sh, fetched with the scripts it
+# checks. Run as root on the router:
 #
 #   sh /root/qos-ex-check.sh            read-only report: changes nothing
 #   sh /root/qos-ex-check.sh match      the same, plus the game flows and the Ping Filter's
