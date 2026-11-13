@@ -4,8 +4,8 @@
 # installable package with the SDK. How to use it: docs/BUILD.md.
 #
 # The package carries the three scripts, the shaper's lib/install.sh, the
-# LuCI app's files (qos-ex-luci.tar.gz), QoS-Ex-install.sh and the check
-# script (qos-ex-check.sh) in /usr/lib/qos-ex, plus a first-run
+# LuCI app's files (qos-ex-luci.tar.gz) and QoS-Ex-install.sh in
+# /usr/lib/qos-ex, plus a first-run
 # script. That script copies them to /root and runs the
 # normal installer (sh /root/QoS-Ex.sh install), so a packaged install ends
 # up exactly like a script install.
@@ -48,7 +48,7 @@ endef
 
 define Package/qos-ex/install
 	$(INSTALL_DIR) $(1)/usr/lib/qos-ex/lib $(1)/etc/uci-defaults
-	$(INSTALL_BIN) ./QoS-Ex.sh ./QoS-Ex-PF.sh ./QoS-Ex-luci-app.sh ./QoS-Ex-install.sh ./qos-ex-check.sh $(1)/usr/lib/qos-ex/
+	$(INSTALL_BIN) ./QoS-Ex.sh ./QoS-Ex-PF.sh ./QoS-Ex-luci-app.sh ./QoS-Ex-install.sh $(1)/usr/lib/qos-ex/
 	$(INSTALL_DATA) ./qos-ex-luci.tar.gz $(1)/usr/lib/qos-ex/
 	$(INSTALL_DATA) ./lib/install.sh $(1)/usr/lib/qos-ex/lib/
 	$(INSTALL_BIN) ./files/qos-ex.defaults $(1)/etc/uci-defaults/90-qos-ex
