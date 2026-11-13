@@ -9,7 +9,7 @@ Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.4 · shaper 3.2.1.8**
 
 ## Shaper 3.2.1.8 and the installer
 
-- New: a check script. The installer keeps `qos-ex-check.sh` in `/root`, fetched with the scripts it checks. Over SSH, `sh /root/qos-ex-check.sh` compares what is installed with the copies in `/root` and checks the queues, the rules, the DSCP restore and the Ping Filter, one PASS, FAIL, INFO or SKIP line each; it changes nothing. A test named after the command (`reload`, `restart`, `redial` and others, listed at the top of the script) changes something for a moment. The report is also saved to `/tmp/qos-ex-check.txt`. The script is kept over a firmware upgrade, removed by uninstall and part of own-firmware builds ([SETUP](SETUP.md#8-over-ssh)).
+- New: a check script for the dev (testing) branch. On a router that follows `dev` the installer keeps `qos-ex-check.sh` in `/root`, fetched with the scripts it checks; a router on `main` does not get it, and switching to `main` removes it. Over SSH, `sh /root/qos-ex-check.sh` compares what is installed with the copies in `/root` and checks the queues, the rules, the DSCP restore and the Ping Filter, one PASS, FAIL, INFO or SKIP line each; it changes nothing. A test named after the command (`reload`, `restart`, `redial` and others, listed at the top of the script) changes something for a moment. The report is also saved to `/tmp/qos-ex-check.txt`. The script is kept over a firmware upgrade and removed by uninstall ([SETUP](SETUP.md#8-over-ssh)).
 - Fixed: an uninstall without the LuCI app's installer in `/root` left the update start lock in `/var/run`.
 
 ## LuCI app 1.4.0.1
