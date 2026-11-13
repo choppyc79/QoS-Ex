@@ -116,10 +116,13 @@ The rating decides most of what Auto Setup suggests:
 | Rating | Which routers | Suggested |
 |---|---|---|
 | Low-spec | One CPU core, a MIPS CPU, or 128 MB of RAM or less | HTB with sfq queues and the Simple rule set; the download shaped on the LAN device when there is only one; Live pages refreshed every 2 s; Ping Filter Lite with a smaller server list |
-| Mid-range | Everything between the two | CAKE with the Adaptive rule set |
-| High-end | Any x86 router, or 4 or more cores at 1500 MHz or more with 1 GB of RAM or more | CAKE with the Advanced rule set |
+| Mid-range | Everything between the two | HFSC with fq_codel queues and the Adaptive rule set |
+| High-end | Any x86 router, or 4 or more cores at 1500 MHz or more with 1024 MB of RAM or more | CAKE with the Adaptive rule set |
 
-The limits can be changed in the `autosetup` section
+The router's own figures count: a router sold with 1 GB of RAM reports a
+little under 1024 MB, and some CPUs report no speed, so both are rated
+mid-range. The limits, and the queue and rule set for each rating, can be
+changed in the `autosetup` section
 ([SETUP.md](SETUP.md#autosetup--auto-setup)).
 
 ### ① Line speed
@@ -132,9 +135,10 @@ what held it back:
 - **the line**: the result is your line speed;
 - **the WAN port**: the result is the port's top speed, and the line may be
   faster;
-- **the router's CPU**: the router could not go faster, so it cannot shape
-  at this speed with CAKE either. Auto Setup then suggests a lighter setup
-  (see step ③).
+- **the router's CPU**: the router could not go faster, so the result may
+  be under your line's speed. Step ③ says so on the speed rows: type the
+  line's speeds if you know them. The queue and rule set stay the ones for
+  your router's rating.
 
 **Bufferbloat, unshaped** grades how far your ping rose under load with
 shaping off, alongside the idle and loaded pings. This delay under load is
@@ -175,9 +179,9 @@ Each suggested change is a row with its reason. Untick any you do not want.
   speeds, the link layer and the overhead. The speed row also shows the rate
   QoS-Ex will shape at once **Headroom** is taken off.
 - **Queue and rules** — the queue type, its leaf queue and the rule set for
-  your router's rating. If the speed test found the CPU at its limit, Auto
-  Setup suggests HTB with sfq and the Simple rule set. HTB is also suggested
-  when the CAKE module is missing.
+  your router's rating. HTB is suggested instead when the queue's kernel
+  module is missing. On a router that is already set up, the rating's queue
+  is a row like any other: untick it to keep yours.
 - **This router** — how often the Live pages refresh.
 - **Ping Filter, if you use it** — sizing for the router: Lite on a low-spec
   router, how many servers are kept, and how often the list is saved. These
