@@ -13,8 +13,6 @@ S=/usr/lib/qos-ex
 # uninstall all work from there).
 cp -f "$S/QoS-Ex.sh" "$S/QoS-Ex-PF.sh" "$S/QoS-Ex-luci-app.sh" "$S/qos-ex-luci.tar.gz" "$S/QoS-Ex-install.sh" /root/ || exit 1
 mkdir -p /root/lib && cp -f "$S/lib/install.sh" /root/lib/ || exit 1
-# The check script (sh /root/qos-ex-check.sh), when the build carries it.
-[ -f "$S/qos-ex-check.sh" ] && cp -f "$S/qos-ex-check.sh" /root/
 
 # First boot after a sysupgrade: the installer's own hook (kept with your
 # settings) runs next and reinstalls from /root. Leave it to that.
