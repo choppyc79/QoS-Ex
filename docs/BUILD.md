@@ -20,9 +20,9 @@ QoS-Ex is three shell scripts that install themselves. The package does not
 replace that; it carries the scripts and runs them for you:
 
 1. The package puts the three scripts, the shaper's `lib/install.sh`, the
-   web app's files (`qos-ex-luci.tar.gz`), `QoS-Ex-install.sh` and the
-   check script (`qos-ex-check.sh`) in `/usr/lib/qos-ex/`, and one
-   first-run script in `/etc/uci-defaults/90-qos-ex`.
+   web app's files (`qos-ex-luci.tar.gz`) and `QoS-Ex-install.sh` in
+   `/usr/lib/qos-ex/`, and one first-run script in
+   `/etc/uci-defaults/90-qos-ex`.
 2. On the first boot of the image (or when the package is installed on a
    running router) the first-run script copies them to `/root` and
    runs `sh /root/QoS-Ex.sh install`.
@@ -128,8 +128,7 @@ cd /path/to/imagebuilder
 
 mkdir -p files/usr/lib/qos-ex/lib files/etc/uci-defaults
 cp ../QoS-Ex/QoS-Ex.sh ../QoS-Ex/QoS-Ex-PF.sh ../QoS-Ex/QoS-Ex-luci-app.sh \
-   ../QoS-Ex/qos-ex-luci.tar.gz ../QoS-Ex/QoS-Ex-install.sh \
-   ../QoS-Ex/qos-ex-check.sh files/usr/lib/qos-ex/
+   ../QoS-Ex/qos-ex-luci.tar.gz ../QoS-Ex/QoS-Ex-install.sh files/usr/lib/qos-ex/
 cp ../QoS-Ex/lib/install.sh files/usr/lib/qos-ex/lib/
 cp ../QoS-Ex/files/qos-ex.defaults files/etc/uci-defaults/90-qos-ex
 
