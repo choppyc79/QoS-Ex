@@ -158,9 +158,9 @@ Add 4 for a VLAN tag (not on ADSL).
 
 | Queue | Choose it when |
 |---|---|
-| **CAKE** | You want the least to tune. The default: one queue that also shares the line fairly between your devices. |
-| **HFSC** | You want the most control: six classes, with a real-time Gaming class that is always served first. |
-| **HTB** | You want the same six classes on less CPU. Auto Setup picks it, with sfq queues, on a low-spec router or one whose CPU cannot keep up with CAKE. |
+| **CAKE** | You want the least to tune: one queue that also shares the line fairly between your devices. The default with Manual setup, and Auto Setup's pick for a high-end router. |
+| **HFSC** | You want the most control: six classes, with a real-time Gaming class that is always served first. Lighter on the CPU than CAKE. Auto Setup's pick for a mid-range router. |
+| **HTB** | You want the same six classes on the least CPU. Auto Setup's pick, with sfq queues, for a low-spec router. |
 
 With HFSC or HTB, keep **Setup → Line → Headroom** at 90% or lower.
 
@@ -168,8 +168,8 @@ With HFSC or HTB, keep **Setup → Line → Headroom** at 90% or lower.
 
 | Rule set | What it does |
 |---|---|
-| **Adaptive** | The default. Decides each connection at its first packet: listed traffic keeps its class, everything else moves up or down as it behaves. |
-| **Advanced** | Marks every packet by its port, its size and its connection's packet rate. Auto Setup's pick for a high-end router. |
+| **Adaptive** | The default, and Auto Setup's pick for a mid-range or high-end router. Decides each connection at its first packet: listed traffic keeps its class, everything else moves up or down as it behaves. |
+| **Advanced** | Marks every packet by its port, its size and its connection's packet rate. |
 | **Simple (SGS)** | The SimpleHFSCgamerscript rules: one class per connection, the fewest rules per packet. Auto Setup's pick for a low-spec router. |
 
 More on each: [Queue](LUCI-GUIDE.md#queue) and [Rules](LUCI-GUIDE.md#rules)
@@ -565,8 +565,9 @@ Adaptive also reads `udp_fast_pps`, `udp_fast_burst`, `udp_small_avgpkt`,
 | `test_mb` | `1500` | The speed test stops early after this many MB each way |
 | `test_url` | `http://speed.cloudflare.com` | Speed test server (Cloudflare's `__down` / `__up` endpoints); an `http://` or `https://` address |
 | `ping_host` | `1.1.1.1` | Pinged idle and during the test; a host name or address |
-| `cpu_busy_pct` | `90` | A core this busy in the test means the router, not the line, set the speed |
+| `cpu_busy_pct` | `90` | A core this busy in the test means the router, not the line, set the speed. Auto Setup then says the line may be faster and asks for its speeds; the queue and rule set stay the rating's |
 | `low_ram_mb` | `128` | At or under this RAM the router is low-spec (as with one core or a MIPS CPU): HTB with sfq leaves, the Simple rule set, the download shaped on the LAN device (when it is the only one), a 2 s Live refresh, Ping Filter Lite and a shorter server list are suggested |
 | `small_flash_mb` | `16` | At or under this writable flash, fewer saves of the server list are suggested |
-| `high_cores` / `high_mhz` / `high_ram_mb` | `4` / `1500` / `1024` | At or over all three (or any x86 router) the router is high-end; between low and high it is mid-range |
-| `rules_low` / `rules_mid` / `rules_high` | `simple` / `adaptive` / `advanced` | The rule set suggested for each kind of router (the low-spec one, with HTB and sfq, whenever the speed test found the CPU at its limit) |
+| `high_cores` / `high_mhz` / `high_ram_mb` | `4` / `1500` / `1024` | At or over all three (or any x86 router) the router is high-end; between low and high it is mid-range. The figures are the router's own: a router sold with 1 GB reports a little under 1024 MB, and a CPU that reports no speed counts as 0, so both are mid-range |
+| `queue_low` / `queue_mid` / `queue_high` | `htb` / `hfsc` / `cake` | The queue suggested for each kind of router: `cake`, `hfsc` or `htb`. HTB is suggested instead when the queue's kernel module is missing |
+| `rules_low` / `rules_mid` / `rules_high` | `simple` / `adaptive` / `adaptive` | The rule set suggested for each kind of router: `simple`, `advanced` or `adaptive` |

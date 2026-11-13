@@ -188,9 +188,12 @@ config autosetup 'autosetup'
 	option high_cores '4'
 	option high_mhz '1500'
 	option high_ram_mb '1024'
+	option queue_low 'htb'
+	option queue_mid 'hfsc'
+	option queue_high 'cake'
 	option rules_low 'simple'
 	option rules_mid 'adaptive'
-	option rules_high 'advanced'
+	option rules_high 'adaptive'
 
 config ips 'ips'
 UCIEOF
@@ -254,6 +257,14 @@ uci_migrate() {
 	if _isnum "$_v" && [ "$_v" -lt 3215 ] && [ "$(uci -q get "$UCI_CFG.hfsc.game_qdisc")" = pfifo ]; then
 		uci -q set "$UCI_CFG.hfsc.game_qdisc=sfq"
 		ui_note "~ hfsc.game_qdisc pfifo -> sfq (new default)"
+		added=$((added + 1))
+	fi
+	# Auto Setup's rule set for a high-end router moved from advanced to
+	# adaptive (3.2.1.9): once, as the gaming queue above, so one picked again
+	# later stays.
+	if _isnum "$_v" && [ "$_v" -lt 3219 ] && [ "$(uci -q get "$UCI_CFG.autosetup.rules_high")" = advanced ]; then
+		uci -q set "$UCI_CFG.autosetup.rules_high=adaptive"
+		ui_note "~ autosetup.rules_high advanced -> adaptive (new default)"
 		added=$((added + 1))
 	fi
 	# The manual fq_codel fields hold numbers only: "auto" becomes the
@@ -1455,8 +1466,11 @@ _as_probe() {
 	_v=$(tc qdisc show dev "$AS_WAN" root 2>/dev/null | awk 'NR == 1 { print $2 }')
 	case "$_v" in cake|cake_mq|hfsc|htb|tbf) _dev_ours "$AS_WAN" || AS_FOREIGN=$_v ;; esac
 	# Tier: low = one core, little RAM (low_ram_mb) or MIPS; high = x86, or
-	# high_cores+ cores at high_mhz+ with high_ram_mb+ RAM; else mid. It picks
-	# the rule set (rules_<tier>) and Ping Filter Lite.
+	# high_cores+ cores at high_mhz+ with high_ram_mb+ RAM; else mid. The
+	# figures are the router's own: a CPU speed it does not report counts as
+	# 0, and a 1 GB router reports under 1024 MB, so both are mid. It picks
+	# the queue (queue_<tier>), the rule set (rules_<tier>) and Ping Filter
+	# Lite.
 	AS_TIER=mid
 	case "$AS_ARCH" in mips*) AS_TIER=low ;; esac
 	[ "$AS_CORES" -le 1 ] && AS_TIER=low
@@ -1781,7 +1795,7 @@ _as_note() { printf 'note|%s\n' "$1"; }
 _as_keep() { printf 'keep|%s|%s|%s\n' "$1" "$(uci -q get "$UCI_CFG.$1")" "$2"; }
 
 _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
-	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why
+	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel
 	# Line rates are the line's speed: the shaper takes Headroom off them.
 	_hr=$(uci -q get "$UCI_CFG.settings.bw_headroom")
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
@@ -1814,44 +1828,50 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			fi
 			# Never over the WAN port's speed.
 			[ "$AS_SPEED" -gt 0 ] && [ "$_q" -gt $((AS_SPEED * 1000)) ] && _q=$((AS_SPEED * 1000))
-			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_q") Mbit from $_src; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
+			# A direction the router's CPU held back: the line may be faster.
+			_w=""
+			if [ "$_src" = "the speed test" ]; then
+				case "${_v% *}" in download_kbps) _w=limit_down ;; *) _w=limit_up ;; esac
+				if [ "$(_as_kv "$_w" "$AS_RUN")" = router ]; then
+					_w=", held by the router's CPU (the line may be faster: type its speeds if you know them)"
+				else
+					_w=""
+				fi
+			fi
+			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_q") Mbit from $_src$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
 		done
 	else
 		_as_note "No line speed yet: run the speed test, or give the line's download and upload speeds."
 	fi
-	# Queue and rules, always shown: from the CPU at the line's speed (the
-	# speed test's busiest core), not guessed from the CPU's model. A CPU
-	# that was flat out unshaped will not shape at that rate with CAKE.
+	# Queue: the rating's (queue_<tier>: HTB on a low-spec router, HFSC on a
+	# mid-range one, CAKE on a high-end one), always shown. The speed test
+	# does not change it: a download to the router itself says nothing about
+	# shaping forwarded traffic.
 	_q=$(uci -q get "$UCI_CFG.settings.qdisc")
 	_v="$AS_CORES cores${AS_MHZ:+ at $AS_MHZ MHz}"
 	[ "$AS_MHZ" = 0 ] && _v="$AS_CORES cores"
-	# Blank (after a reset) counts as CAKE, the default.
-	if [ "${_q:-cake}" = cake ] && ! _as_kmod sch_cake; then
-		_as_sug settings.qdisc htb "the CAKE module (kmod-sched-cake) is not installed"
-	elif [ "$_lim" = router ] && [ "${_q:-cake}" = cake ]; then
-		_as_sug settings.qdisc htb "$_v, busiest core ${_busy}% in the speed test: the CPU is the limit, and HTB needs less of it than CAKE"
-	elif [ "$_lim" = router ]; then
-		_as_keep settings.qdisc "$_v, busiest core ${_busy}% in the speed test: the CPU is the limit; $_q needs less of it than CAKE"
-	elif [ "$AS_TIER" = low ]; then
-		# The lowest spec: HTB with sfq leaves and the Simple rules.
-		_w="low-spec router ($_v): HTB with sfq leaves is the cheapest queue"
-		if [ "${_q:-cake}" = htb ]; then _as_keep settings.qdisc "$_w"; else _as_sug settings.qdisc htb "$_w"; fi
-	else
-		_w="$_v; run the speed test to check this router keeps up at your line's speed"
-		[ "$_src" = "the speed test" ] && _w="$_v, busiest core ${_busy}% in the speed test: this router keeps up at your line's speed"
-		if [ -n "$_q" ]; then _as_keep settings.qdisc "$_w"; else _as_sug settings.qdisc cake "$_w"; fi
+	_qsel=$(uci -q get "$UCI_CFG.autosetup.queue_$AS_TIER")
+	case "$_qsel" in
+		cake|hfsc|htb) ;;
+		*) case "$AS_TIER" in low) _qsel=htb ;; mid) _qsel=hfsc ;; *) _qsel=cake ;; esac ;;
+	esac
+	case "$_qsel" in
+		htb)  _w="$AS_TIER-spec router ($_v): HTB is the cheapest queue" ;;
+		hfsc) _w="$AS_TIER-spec router ($_v): HFSC is lighter than CAKE and has a real-time Gaming class" ;;
+		*)    _w="$AS_TIER-spec router ($_v): CAKE also shares the line fairly between devices" ;;
+	esac
+	# A queue whose module is missing: HTB.
+	if [ "$_qsel" = cake ] && ! _as_kmod sch_cake; then
+		_qsel=htb; _w="the CAKE module (kmod-sched-cake) is not installed"
+	elif [ "$_qsel" = hfsc ] && ! _as_kmod sch_hfsc; then
+		_qsel=htb; _w="the HFSC module (sch_hfsc) is not installed"
 	fi
-	# The queue the rows above keep or suggest: the leaf row matters for
-	# HFSC / HTB only.
-	_qsel=${_q:-cake}
-	if [ "$AS_TIER" = low ]; then _qsel=htb
-	elif [ "${_q:-cake}" = cake ] && { [ "$_lim" = router ] || ! _as_kmod sch_cake; }; then _qsel=htb; fi
-	# Leaf queue inside the HFSC / HTB classes: sfq where the CPU is short.
+	if [ "$_q" = "$_qsel" ]; then _as_keep settings.qdisc "$_w"; else _as_sug settings.qdisc "$_qsel" "$_w"; fi
+	# Leaf queue inside the HFSC / HTB classes: sfq on a low-spec router.
 	if [ "$_qsel" != cake ]; then
 		_q=$(uci -q get "$UCI_CFG.hfsc.default_qdisc")
-		if [ "$AS_TIER" = low ] || [ "$_lim" = router ]; then
-			_w="sfq costs less CPU than fq_codel"
-			[ "$AS_TIER" = low ] && _w="low-spec router: $_w"
+		if [ "$AS_TIER" = low ]; then
+			_w="low-spec router: sfq costs less CPU than fq_codel"
 			if [ "${_q:-fq_codel}" = sfq ]; then _as_keep hfsc.default_qdisc "$_w"; else _as_sug hfsc.default_qdisc sfq "$_w"; fi
 		elif [ "${_q:-fq_codel}" = fq_codel ]; then
 			_as_keep hfsc.default_qdisc "$AS_TIER-spec router: fq_codel keeps latency lower than sfq"
@@ -1859,19 +1879,14 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			_as_sug hfsc.default_qdisc fq_codel "$AS_TIER-spec router: fq_codel keeps latency lower than sfq"
 		fi
 	fi
-	# Rule set: the tier's (rules_<tier>); the low tier's (Simple, the
-	# fewest rules a packet) when the CPU was the limit in the speed test.
+	# Rule set: the rating's (rules_<tier>).
 	_q=$(uci -q get "$UCI_CFG.settings.nft_mode")
 	_w=$(uci -q get "$UCI_CFG.autosetup.rules_$AS_TIER")
-	_why="$AS_TIER-spec router ($_v)"
-	if [ "$_lim" = router ]; then
-		_w=$(uci -q get "$UCI_CFG.autosetup.rules_low")
-		_why="the router's CPU was the limit: Simple (SGS) has the fewest rules a packet"
-	fi
 	case "$_w" in
 		simple|advanced|adaptive) ;;
-		*) if [ "$AS_TIER" = low ] || [ "$_lim" = router ]; then _w=simple; else _w=adaptive; fi ;;
+		*) if [ "$AS_TIER" = low ]; then _w=simple; else _w=adaptive; fi ;;
 	esac
+	_why="$AS_TIER-spec router ($_v)"
 	if [ "$_q" = "$_w" ]; then _as_keep settings.nft_mode "$_why"
 	else _as_sug settings.nft_mode "$_w" "$_why"; fi
 	# Where the download is shaped: on the LAN device as the traffic leaves
@@ -1898,7 +1913,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	if [ "${_q:-1}" = "$_w" ]; then _as_keep settings.live_refresh "$_why"
 	else _as_sug settings.live_refresh "$_w" "$_why"; fi
 	[ "$_lim" = router ] &&
-		_as_note "The router's CPU was the limit in the speed test (busiest core ${_busy}%). Shaping takes CPU too: if Live -> Stats shows drops or the ping rises, lower the rates."
+		_as_note "The router's CPU held the speed test back (busiest core ${_busy}%): the suggested line speeds are what the router managed, and the line may be faster. Shaping takes CPU too: if Live -> Stats shows drops or the ping rises, lower the rates."
 	# Overhead: the bytes each packet carries on the wire besides IP
 	# (tc-cake: ethernet 38, bridged-ptm 22; ATM 44 when the encapsulation is
 	# unknown); PPPoE adds 8, a VLAN tag 4.
