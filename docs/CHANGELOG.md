@@ -5,7 +5,14 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.4 · shaper 3.2.1.8**
+Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.4 · shaper 3.2.1.9**
+
+## Shaper 3.2.1.9
+
+- Changed: Auto Setup picks the queue for the router's rating: HTB on a low-spec router (as before), HFSC on a mid-range one, CAKE on a high-end one. It used to keep the queue already set (CAKE on a new install) unless the router was low-spec. Manual setup still starts from CAKE. The three picks are the new `queue_low`, `queue_mid` and `queue_high` options ([SETUP.md](SETUP.md#autosetup--auto-setup)); HTB is suggested instead when a queue's kernel module is missing. On a router that is already set up, **Run Auto Setup** offers its rating's queue as a row you can untick.
+- Changed: Auto Setup suggests the Adaptive rule set on a high-end router too (it suggested Advanced). `rules_high` is `adaptive`; a config still holding the old default is moved once. A router that is already set up keeps its rule set.
+- Changed: a speed test held back by the router's CPU no longer changes the queue or the rule set (it suggested HTB with sfq and the Simple rule set on any router). The test downloads to the router itself, which does not show whether the router can shape at that speed. Auto Setup now says the measured speed may be under the line's, and asks for the line's speeds.
+- New: the debug report (**System → Maintenance → Copy for forum**) carries the router's rating and the last speed test.
 
 ## Shaper 3.2.1.8 and the installer
 
