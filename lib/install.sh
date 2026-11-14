@@ -191,6 +191,7 @@ config autosetup 'autosetup'
 	option queue_low 'htb'
 	option queue_mid 'hfsc'
 	option queue_high 'cake'
+	option cake_max_mbit '500'
 	option rules_low 'simple'
 	option rules_mid 'adaptive'
 	option rules_high 'adaptive'
@@ -1795,7 +1796,7 @@ _as_note() { printf 'note|%s\n' "$1"; }
 _as_keep() { printf 'keep|%s|%s|%s\n' "$1" "$(uci -q get "$UCI_CFG.$1")" "$2"; }
 
 _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
-	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel
+	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel _mx=0 _cm _st=0
 	# Line rates are the line's speed: the shaper takes Headroom off them.
 	_hr=$(uci -q get "$UCI_CFG.settings.bw_headroom")
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
@@ -1828,6 +1829,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			fi
 			# Never over the WAN port's speed.
 			[ "$AS_SPEED" -gt 0 ] && [ "$_q" -gt $((AS_SPEED * 1000)) ] && _q=$((AS_SPEED * 1000))
+			[ "$_q" -gt "$_mx" ] && _mx=$_q
 			# A direction the router's CPU held back: the line may be faster.
 			_w=""
 			if [ "$_src" = "the speed test" ]; then
@@ -1844,9 +1846,10 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		_as_note "No line speed yet: run the speed test, or give the line's download and upload speeds."
 	fi
 	# Queue: the rating's (queue_<tier>: HTB on a low-spec router, HFSC on a
-	# mid-range one, CAKE on a high-end one), always shown. The speed test
-	# does not change it: a download to the router itself says nothing about
-	# shaping forwarded traffic.
+	# mid-range one, CAKE on a high-end one), always shown, then one step
+	# lighter at most (CAKE -> HFSC -> HTB): CAKE on a router that is not x86
+	# with a line faster than cake_max_mbit, or a fresh speed test that kept a
+	# core at cpu_busy_pct (it runs unshaped: shaping only adds to that).
 	_q=$(uci -q get "$UCI_CFG.settings.qdisc")
 	_v="$AS_CORES cores${AS_MHZ:+ at $AS_MHZ MHz}"
 	[ "$AS_MHZ" = 0 ] && _v="$AS_CORES cores"
@@ -1860,6 +1863,21 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		hfsc) _w="$AS_TIER-spec router ($_v): HFSC is lighter than CAKE and has a real-time Gaming class" ;;
 		*)    _w="$AS_TIER-spec router ($_v): CAKE also shares the line fairly between devices" ;;
 	esac
+	# _mx: the faster line rate, 0 with none known.
+	_cm=$(_as_num cake_max_mbit 500)
+	if [ "$_qsel" = cake ] && [ "$_cm" -gt 0 ] && [ "$_mx" -gt $((_cm * 1000)) ]; then
+		case "$AS_ARCH" in
+			x86_64|i[3-6]86) ;;
+			*) _qsel=hfsc; _st=1
+			   _w="$AS_TIER-spec router ($_v) at $((_mx / 1000)) Mbit: above cake_max_mbit ($_cm) CAKE runs out of CPU - HFSC is lighter and keeps the real-time Gaming class" ;;
+		esac
+	fi
+	if [ "$_lim" = router ] && [ "$_st" = 0 ]; then
+		case "$_qsel" in
+			cake) _qsel=hfsc; _w="$AS_TIER-spec router ($_v): the speed test maxed a CPU core (${_busy}%) unshaped - HFSC is lighter than CAKE" ;;
+			hfsc) _qsel=htb;  _w="$AS_TIER-spec router ($_v): the speed test maxed a CPU core (${_busy}%) unshaped - HTB is lighter than HFSC" ;;
+		esac
+	fi
 	# A queue whose module is missing: HTB.
 	if [ "$_qsel" = cake ] && ! _as_kmod sch_cake; then
 		_qsel=htb; _w="the CAKE module (kmod-sched-cake) is not installed"
