@@ -277,7 +277,7 @@ range-checks every number.
 | `geoip_api` | `http://ip-api.com/json` | The last lookup service (plain HTTP). Set it to a service of your own and only that one is asked |
 | `lite` | `0` | `1` = Ping Filter Lite, for small routers (Auto Setup suggests it on a low-spec router): the ping limit or radius, locations, the lists and the new-server hold only. No gameplay grading, handshake timing or Ping Catch; it checks every 2–3 s instead of every second and pings 4 servers at a time, not 20 |
 | `telemetry` | `1` | Grade from gameplay: measure jitter and stutter while you play, and grade servers on the ping during play |
-| `max_servers` | `250` | Server list size (50–2000). Above it the servers not seen for longest are dropped (Always allow and Always block stay) |
+| `max_servers` | `250` | Server list size (50–2000). Above it the servers not seen for longest are dropped (Always allow and Always block stay). The pages and `pingfilter servers` show the first 800, plus servers in use |
 | `row_ttl` | `604800` | Seconds an unseen server stays in the list (7 days; 43200–2592000) |
 | `persist_interval` | `3600` | Seconds between saves of the server list to flash (60–86400; stop and reboot always save) |
 | `area_adjust_pct` | `5` | A server that ignores ping is estimated from measured servers near it; that figure is lowered by this many percent (0–50) |
