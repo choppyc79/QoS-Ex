@@ -117,7 +117,7 @@ The rating decides most of what Auto Setup suggests:
 |---|---|---|
 | Low-spec | One CPU core, a MIPS CPU, or 128 MB of RAM or less | HTB with sfq queues and the Simple rule set; the download shaped on the LAN device when there is only one; Live pages refreshed every 2 s; Ping Filter Lite with a smaller server list |
 | Mid-range | Everything between the two | HFSC with fq_codel queues and the Adaptive rule set |
-| High-end | Any x86 router, or 4 or more cores at 1500 MHz or more with 1024 MB of RAM or more | CAKE with the Adaptive rule set |
+| High-end | Any x86 router, or 4 or more cores at 1500 MHz or more with 1024 MB of RAM or more | CAKE with the Adaptive rule set (HFSC on a router that is not x86 when the line is faster than 500 Mbit) |
 
 The router's own figures count: a router sold with 1 GB of RAM reports a
 little under 1024 MB, and some CPUs report no speed, so both are rated
@@ -137,8 +137,10 @@ what held it back:
   faster;
 - **the router's CPU**: the router could not go faster, so the result may
   be under your line's speed. Step ③ says so on the speed rows: type the
-  line's speeds if you know them. The queue and rule set stay the ones for
-  your router's rating.
+  line's speeds if you know them. The test runs with shaping off, and
+  shaping takes CPU too, so step ③ suggests a queue one step lighter than
+  your router's rating (CAKE → HFSC, HFSC → HTB). The rule set stays the
+  rating's.
 
 **Bufferbloat, unshaped** grades how far your ping rose under load with
 shaping off, alongside the idle and loaded pings. This delay under load is
@@ -179,7 +181,10 @@ Each suggested change is a row with its reason. Untick any you do not want.
   speeds, the link layer and the overhead. The speed row also shows the rate
   QoS-Ex will shape at once **Headroom** is taken off.
 - **Queue and rules** — the queue type, its leaf queue and the rule set for
-  your router's rating. HTB is suggested instead when the queue's kernel
+  your router's rating. The queue is one step lighter (never two) when the
+  speed test was held by the router's CPU, and HFSC replaces CAKE on a
+  router that is not x86 when the line is faster than 500 Mbit
+  (`cake_max_mbit`). HTB is suggested instead when the queue's kernel
   module is missing. On a router that is already set up, the rating's queue
   is a row like any other: untick it to keep yours.
 - **This router** — how often the Live pages refresh.
