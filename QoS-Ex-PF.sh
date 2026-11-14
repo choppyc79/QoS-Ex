@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.0.9.4"
+VERSION="2.0.9.5"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -701,13 +701,17 @@ _pf_lim() {
 	_LIM=$((_LIM + _LIM * ${PF_PING_VAR_PCT:-5} / 100))
 }
 # The one way an ICMP, handshake or in-play reading changes a row's figure.
-# _pf_fold <old ms> <old src> <old connects> <ms> <src> <connects> [fresh]
+# _pf_fold <old ms> <old src> <old connects> <ms> <src> <connects> [fresh] [ip]
 # -> _F_MS _F_SRC _F_N (a handshake's connects, servers.tsv col 12; 0 for
 # any other figure); 1 = not taken. Every reading is an upper bound:
 #   - no own figure (an estimate, or none): taken -- an estimate is the
 #     last resort; a handshake over the limit from one connect is not
 #     while the estimate is under it (server think time, one slow connect:
-#     a server blocked on it is never timed again); with no limit (watch
+#     a server blocked on it is never timed again), nor in ping mode while
+#     there is no estimate yet and one can still come ($8 = the server: its
+#     location is still to come, _pf_geo_nofix) and it is not being played
+#     (in session it is taken and the guard keeps it in; with Ping Catch a
+#     server not located is let in until it is); with no limit (watch
 #     only, pure distance) only one far over the estimate (over hs_sus_x
 #     times it plus hs_sus_ms) is not -- the first reply of a flow that is
 #     not a handshake (telemetry, a late matchmaking answer) reads seconds.
@@ -747,6 +751,10 @@ _pf_fold() {
 	elif [ "$s" = real ] && [ "$n" -lt 2 ] && [ "$om" -gt 0 ] 2>/dev/null \
 	   && { { [ "$_LIM" -gt 0 ] && [ "$m" -gt "$_LIM" ] && [ "$om" -le "$_LIM" ]; } \
 	      || { [ "$_LIM" -eq 0 ] && [ "$m" -gt $((om * ${PF_HS_SUS_X:-2} + ${PF_HS_SUS_MS:-50})) ]; }; }; then
+		return 1
+	elif [ "$s" = real ] && [ "$n" -lt 2 ] && [ "$_LIM" -gt 0 ] && [ "$m" -gt "$_LIM" ] \
+	   && [ "${PF_BLOCK_MODE:-ping}" != distance ] && ! [ "$om" -gt 0 ] 2>/dev/null \
+	   && [ -n "$8" ] && ! _pf_geo_nofix "$8" && ! _pf_in_session "$8"; then
 		return 1
 	fi
 	_F_MS=$m; _F_SRC=$s; _F_N=0
@@ -801,7 +809,7 @@ _pf_reading() {
 	_pf_row "$ex"
 	_pf_sus "$1" "$ms" "$3" "$6" || return 1
 	[ "$_S_MS" -gt 0 ] 2>/dev/null && ms=$_S_MS
-	_pf_fold "$PF_C_PING" "$PF_C_SRC" "$PF_C_LOSS" "$ms" "$3" "$4" "$6" || return 1
+	_pf_fold "$PF_C_PING" "$PF_C_SRC" "$PF_C_LOSS" "$ms" "$3" "$4" "$6" "$1" || return 1
 	_pf_prefix_learn "$1" "$ms" "$PF_C_LAT" "$PF_C_LON" "$PF_C_CO" "$PF_C_CI"
 	PF_HSN=$_F_N
 	_pf_verdict "$1" "$_F_MS" "$_F_SRC" "$5"
@@ -1057,6 +1065,7 @@ _pf_hs_ingest() {
 			_pf_lim
 			_w="far over its estimate (${PF_C_PING}ms)"
 			[ "$_LIM" -gt 0 ] && _w="over the limit, its estimate (${PF_C_PING}ms) under it"
+			[ "$_LIM" -gt 0 ] && ! [ "$PF_C_PING" -gt 0 ] 2>/dev/null && _w="over the limit, no estimate yet (its location is still to come)"
 			pf_note "INFO" "ping filter: handshake RTT ${ms}ms for $ip not used yet - one connect $_w; a second connect confirms it"
 		fi
 	done
@@ -4365,9 +4374,11 @@ pf_scan_once() {
 			local _hm="" _hn=""
 			read -r _hm _hn < "$PF_RUN_DIR/hs-$f_dst" 2>/dev/null
 			rm -f "$PF_RUN_DIR/hs-$f_dst" 2>/dev/null
-			if _pf_fold "$current_ping" "$current_src" 0 "$_hm" real "${_hn:-1}"; then
+			if _pf_fold "$current_ping" "$current_src" 0 "$_hm" real "${_hn:-1}" "" "$f_dst"; then
 				current_ping=$_F_MS; current_src=$_F_SRC; current_n=$_F_N
 				_pf_prefix_learn "$f_dst" "$_hm" "$lat" "$lon" "$country" "$city"
+			elif [ "$_hm" -gt 0 ] 2>/dev/null; then
+				pf_note "INFO" "ping filter: handshake RTT ${_hm}ms for $f_dst not used yet at first sight - one connect; a second connect confirms it"
 			fi
 		fi
 
