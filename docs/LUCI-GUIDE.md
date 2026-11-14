@@ -394,7 +394,8 @@ needs internet access. The rest of the app works without it.
 ### Servers
 
 Every server the Ping Filter knows, in one table, plus every Always allow
-and Always block entry, including one not seen yet.
+and Always block entry, including one not seen yet. With `max_servers` set
+above 800, the table shows the first 800 and the servers in use.
 
 - The chips show only allowed, blocked, always allowed, always blocked or
   cached (known from earlier) servers.
