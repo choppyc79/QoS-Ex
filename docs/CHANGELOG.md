@@ -5,7 +5,13 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.7 · shaper 3.2.1.9**
+Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.7 · shaper 3.2.2.0**
+
+## Shaper 3.2.2.0
+
+- Changed: Auto Setup takes the line speed into account when it picks the queue. On a high-end router that is not x86, a line faster than 500 Mbit (either way) gets HFSC instead of CAKE: CAKE shapes each direction on one CPU core, and on many ARM routers that core cannot keep up near a gigabit. The limit is the new `cake_max_mbit` option ([SETUP.md](SETUP.md#autosetup--auto-setup)); `0` turns it off. x86 routers keep CAKE.
+- Changed: a speed test held back by the router's CPU now suggests a queue one step lighter than the rating's: CAKE → HFSC, HFSC → HTB (3.2.1.9 only warned). The test runs with shaping off, so a CPU already busy then has less left for shaping. The rule set still stays the rating's.
+- The queue moves one step at most: a router that gets HFSC for its line speed does not drop to HTB as well. A router that is already set up keeps its queue unless **Run Auto Setup** is applied with the queue row ticked.
 
 ## Ping Filter 2.0.9.7
 
