@@ -5,7 +5,13 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.4 · shaper 3.2.1.9**
+Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.5 · shaper 3.2.1.9**
+
+## Ping Filter 2.0.9.5
+
+- Fixed: with a ping limit, a new server could be blocked for good on one slow first reply. The Ping Filter times the game's first exchange with a server (the handshake), and a server that takes a second to answer it reads around 1000 ms when its ping is far lower. One such reading over the limit is not used while the server's estimate is under the limit, but a server whose location had not arrived yet had no estimate, so the reading was used and the server blocked. A blocked server is never timed again, so the estimate from its area never counted (seen: two servers at 918 and 1120 ms in a city where four others read 95 to 99 ms). Now the reading waits for the location: the server is held until it is located, then graded on its estimate. A second connect still over the limit blocks it, as before. Nothing changes with location lookups off or down, for a server being played (it stays in), or in distance mode.
+- Changed: the log says when a handshake is not used at first sight, and says "no estimate yet" when the server is not located.
+- A server blocked this way before this update stays blocked: remove it with **×** on the Ping Filter's Servers page, and it is graded again the next time the game uses it.
 
 ## Shaper 3.2.1.9
 
