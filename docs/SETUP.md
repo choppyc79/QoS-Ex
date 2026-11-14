@@ -158,7 +158,7 @@ Add 4 for a VLAN tag (not on ADSL).
 
 | Queue | Choose it when |
 |---|---|
-| **CAKE** | You want the least to tune: one queue that also shares the line fairly between your devices. The default with Manual setup, and Auto Setup's pick for a high-end router. |
+| **CAKE** | You want the least to tune: one queue that also shares the line fairly between your devices. The default with Manual setup, and Auto Setup's pick for a high-end router, unless the router is not x86 and the line is faster than 500 Mbit. |
 | **HFSC** | You want the most control: six classes, with a real-time Gaming class that is always served first. Lighter on the CPU than CAKE. Auto Setup's pick for a mid-range router. |
 | **HTB** | You want the same six classes on the least CPU. Auto Setup's pick, with sfq queues, for a low-spec router. |
 
@@ -565,9 +565,10 @@ Adaptive also reads `udp_fast_pps`, `udp_fast_burst`, `udp_small_avgpkt`,
 | `test_mb` | `1500` | The speed test stops early after this many MB each way |
 | `test_url` | `http://speed.cloudflare.com` | Speed test server (Cloudflare's `__down` / `__up` endpoints); an `http://` or `https://` address |
 | `ping_host` | `1.1.1.1` | Pinged idle and during the test; a host name or address |
-| `cpu_busy_pct` | `90` | A core this busy in the test means the router, not the line, set the speed. Auto Setup then says the line may be faster and asks for its speeds; the queue and rule set stay the rating's |
+| `cpu_busy_pct` | `90` | A core this busy in the test means the router, not the line, set the speed. Auto Setup then says the line may be faster, asks for its speeds and suggests a queue one step lighter than the rating's (CAKE → HFSC, HFSC → HTB); the rule set stays the rating's |
 | `low_ram_mb` | `128` | At or under this RAM the router is low-spec (as with one core or a MIPS CPU): HTB with sfq leaves, the Simple rule set, the download shaped on the LAN device (when it is the only one), a 2 s Live refresh, Ping Filter Lite and a shorter server list are suggested |
 | `small_flash_mb` | `16` | At or under this writable flash, fewer saves of the server list are suggested |
 | `high_cores` / `high_mhz` / `high_ram_mb` | `4` / `1500` / `1024` | At or over all three (or any x86 router) the router is high-end; between low and high it is mid-range. The figures are the router's own: a router sold with 1 GB reports a little under 1024 MB, and a CPU that reports no speed counts as 0, so both are mid-range |
-| `queue_low` / `queue_mid` / `queue_high` | `htb` / `hfsc` / `cake` | The queue suggested for each kind of router: `cake`, `hfsc` or `htb`. HTB is suggested instead when the queue's kernel module is missing |
+| `queue_low` / `queue_mid` / `queue_high` | `htb` / `hfsc` / `cake` | The queue suggested for each kind of router: `cake`, `hfsc` or `htb`. It is one step lighter (never two) after `cake_max_mbit` or `cpu_busy_pct`, and HTB is suggested instead when the queue's kernel module is missing |
+| `cake_max_mbit` | `500` | On a router that is not x86, a line faster than this many Mbit (either way) gets HFSC instead of CAKE: CAKE shapes each direction on one CPU core. `0` = off |
 | `rules_low` / `rules_mid` / `rules_high` | `simple` / `adaptive` / `adaptive` | The rule set suggested for each kind of router: `simple`, `advanced` or `adaptive` |

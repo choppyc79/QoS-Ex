@@ -21,7 +21,7 @@
 # Software Foundation, either version 3 of the License, or (at your option)
 # any later version.  See <https://www.gnu.org/licenses/> for details.
 
-VERSION="3.2.1.9"
+VERSION="3.2.2.0"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="QoS-Ex"

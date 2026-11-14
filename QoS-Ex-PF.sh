@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.0.9.4"
+VERSION="2.0.9.7"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -322,7 +322,18 @@ PF_GEOIP_DEFAULT="http://ip-api.com/json"
 
 pf_load_config() {
 	local _e _m _i
-	config_load "$UCI_CFG"
+	# A re-read in the same shell (the daemon): uci_load resets the list
+	# variables only, so an option deleted since the last read would keep
+	# its old value. Forget the last read first. Unreadable just now: keep
+	# what is loaded.
+	if [ "${_PF_CFG_READ:-0}" = 1 ]; then
+		# shellcheck disable=SC2046 # variable names, split on purpose
+		unset $(set | sed -n 's/^\(CONFIG_[A-Za-z0-9_]*\)=.*/\1/p')
+		config_load "$UCI_CFG" || return 1
+	else
+		config_load "$UCI_CFG"
+	fi
+	_PF_CFG_READ=1
 	# config_get, not config_list_foreach: it returns a list's items space-
 	# separated AND a value written as a plain option (`uci set ...`), which
 	# config_list_foreach skips silently (as QoS-Ex.sh reads them).
@@ -494,9 +505,10 @@ pf_load_config() {
 	PF_TELE_CKPT_WIN=12       # jitter windows that make one graded segment
 	PF_TELE_EWMA_REF=90       # segment length the history EWMA was tuned for
 	PF_MAC_REFRESH=30         # how often a MAC device's address is re-read
-	PF_GEO_PER_PASS=2         # location lookups per idle pass (backfill)
+	PF_GEO_PER_PASS=2         # idle pass (backfill): locations queued, and applied
 	PF_TELE_CKPT=90           # graded segment length (s), over session_min
 	PF_TELE_FINALIZE=25       # idle wait (s) before a session is folded in
+	PF_JSON_MAX=800           # servers in one JSON reply (ubus: 1 MiB a message)
 	# Lite (small routers; Auto Setup turns it on for its low tier): the ping
 	# limit or radius, locations, lists, the hold and the session guard.
 	# No gameplay grading (telemetry), handshake timing or Ping Catch;
@@ -701,13 +713,17 @@ _pf_lim() {
 	_LIM=$((_LIM + _LIM * ${PF_PING_VAR_PCT:-5} / 100))
 }
 # The one way an ICMP, handshake or in-play reading changes a row's figure.
-# _pf_fold <old ms> <old src> <old connects> <ms> <src> <connects> [fresh]
+# _pf_fold <old ms> <old src> <old connects> <ms> <src> <connects> [fresh] [ip]
 # -> _F_MS _F_SRC _F_N (a handshake's connects, servers.tsv col 12; 0 for
 # any other figure); 1 = not taken. Every reading is an upper bound:
 #   - no own figure (an estimate, or none): taken -- an estimate is the
 #     last resort; a handshake over the limit from one connect is not
 #     while the estimate is under it (server think time, one slow connect:
-#     a server blocked on it is never timed again); with no limit (watch
+#     a server blocked on it is never timed again), nor in ping mode while
+#     there is no estimate yet and one can still come ($8 = the server: its
+#     location is still to come, _pf_geo_nofix) and it is not being played
+#     (in session it is taken and the guard keeps it in; with Ping Catch a
+#     server not located is let in until it is); with no limit (watch
 #     only, pure distance) only one far over the estimate (over hs_sus_x
 #     times it plus hs_sus_ms) is not -- the first reply of a flow that is
 #     not a handshake (telemetry, a late matchmaking answer) reads seconds.
@@ -722,7 +738,11 @@ _pf_lim() {
 #     keeps src real and the count, and such a handshake over an own figure
 #     itself over the limit sets it (the figure stays the lower).
 _pf_fold() {
-	local om="$1" os="$2" m="$4" s="$5" n="${6:-1}" c=0
+	# PF_GEO_NEG: a server just timed is live, and a failed lookup of a
+	# live server is tried again after geo_retry (pf_scan_once). "Its
+	# location can still come" (_pf_geo_nofix) is asked with that time
+	# wherever the reading is folded, not with the idle backlog's 10 min.
+	local om="$1" os="$2" m="$4" s="$5" n="${6:-1}" c=0 PF_GEO_NEG="${PF_GEO_RETRY:-60}"
 	_F_MS=$om; _F_SRC=$os; _F_N=0
 	case "$3" in ''|*[!0-9]*) ;; *) [ "$os" = real ] && _F_N=$3 ;; esac
 	[ "$m" -gt 0 ] 2>/dev/null || return 1
@@ -747,6 +767,10 @@ _pf_fold() {
 	elif [ "$s" = real ] && [ "$n" -lt 2 ] && [ "$om" -gt 0 ] 2>/dev/null \
 	   && { { [ "$_LIM" -gt 0 ] && [ "$m" -gt "$_LIM" ] && [ "$om" -le "$_LIM" ]; } \
 	      || { [ "$_LIM" -eq 0 ] && [ "$m" -gt $((om * ${PF_HS_SUS_X:-2} + ${PF_HS_SUS_MS:-50})) ]; }; }; then
+		return 1
+	elif [ "$s" = real ] && [ "$n" -lt 2 ] && [ "$_LIM" -gt 0 ] && [ "$m" -gt "$_LIM" ] \
+	   && [ "${PF_BLOCK_MODE:-ping}" != distance ] && ! [ "$om" -gt 0 ] 2>/dev/null \
+	   && [ -n "$8" ] && ! _pf_geo_nofix "$8" && ! _pf_in_session "$8"; then
 		return 1
 	fi
 	_F_MS=$m; _F_SRC=$s; _F_N=0
@@ -801,7 +825,7 @@ _pf_reading() {
 	_pf_row "$ex"
 	_pf_sus "$1" "$ms" "$3" "$6" || return 1
 	[ "$_S_MS" -gt 0 ] 2>/dev/null && ms=$_S_MS
-	_pf_fold "$PF_C_PING" "$PF_C_SRC" "$PF_C_LOSS" "$ms" "$3" "$4" "$6" || return 1
+	_pf_fold "$PF_C_PING" "$PF_C_SRC" "$PF_C_LOSS" "$ms" "$3" "$4" "$6" "$1" || return 1
 	_pf_prefix_learn "$1" "$ms" "$PF_C_LAT" "$PF_C_LON" "$PF_C_CO" "$PF_C_CI"
 	PF_HSN=$_F_N
 	_pf_verdict "$1" "$_F_MS" "$_F_SRC" "$5"
@@ -863,7 +887,8 @@ _pf_sess_tick() {   # now
 			for (ip in C) {
 				s = (now - S[ip] < w) ? S[ip] + 0 : 0
 				if (ip in P) {
-					d = C[ip] - P[ip]; if (d < 0) d = C[ip]
+					# A flow gone from the table lowers the sum: no packets this tick.
+					d = C[ip] - P[ip]; if (d < 0) d = 0
 					dt = now - T[ip]; if (dt < 1) dt = 1
 					if (d / dt >= cmp + 0) { G[ip] = now; s = now }
 					else if (d > 0 && s && G[ip] + 0 > 0) s = now
@@ -1033,9 +1058,12 @@ _pf_owner_put() {
 
 # Fold handshake readings into rows and kernel sets (_pf_reading; pins keep
 # their verdict and take the value). Runs from pf_scan_once (reads its $now).
+# A played server is timed again on every connect (a game opens new flows
+# all the time, one counted every tele_gap s): only a new figure, a new
+# verdict or the second connect is logged.
 _pf_hs_ingest() {
 	[ "${PF_HS_RTT:-0}" = "1" ] || return 0
-	local f ip ms n ex _w
+	local f ip ms n ex _w _op _os _on
 	for f in "$PF_RUN_DIR"/hs-*; do
 		[ -f "$f" ] || continue
 		ip=${f##*/hs-}
@@ -1051,12 +1079,17 @@ _pf_hs_ingest() {
 			continue
 		fi
 		rm -f "$f" 2>/dev/null
+		_pf_row "$ex"; _op=$PF_C_PING; _os=$PF_C_SRC; _on=0
+		[ "$_os" = real ] && _on=$PF_C_LOSS
 		if _pf_reading "$ip" "$ms" real "${n:-1}" 1; then
+			[ "$_os" = real ] && [ "$_F_MS" = "$_op" ] && [ "$_V" = "$_V_OLD" ] \
+				&& { [ "$_on" -ge 2 ] 2>/dev/null || [ "$_F_N" -lt 2 ] 2>/dev/null; } && continue
 			pf_note "INFO" "ping filter: handshake RTT ${ms}ms for $ip ($_V, ${n:-1} connect(s))"
 		elif ! _pf_src_measured "$PF_C_SRC"; then
 			_pf_lim
 			_w="far over its estimate (${PF_C_PING}ms)"
 			[ "$_LIM" -gt 0 ] && _w="over the limit, its estimate (${PF_C_PING}ms) under it"
+			[ "$_LIM" -gt 0 ] && ! [ "$PF_C_PING" -gt 0 ] 2>/dev/null && _w="over the limit, no estimate yet (its location is still to come)"
 			pf_note "INFO" "ping filter: handshake RTT ${ms}ms for $ip not used yet - one connect $_w; a second connect confirms it"
 		fi
 	done
@@ -1330,9 +1363,12 @@ _pf_run_with_timeout() {
 	"$@" &
 	_p=$!
 	# The watchdog takes its sleep with it, or the sleep runs on orphaned.
-	( _pf_title pf-watchdog; trap 'kill "$_s" 2>/dev/null; exit 0' TERM
+	# The trap kills the sleep also when TERM lands between its fork and
+	# "_s=$!" ($! is the sleep then). Lock fds closed: neither the watchdog
+	# nor a sleep that outlives it may keep the scan or TSV lock.
+	( _pf_title pf-watchdog; _s=""; trap 'kill "${_s:-$!}" 2>/dev/null; exit 0' TERM
 	  sleep "$_t" & _s=$!
-	  wait "$_s" && kill "$_p" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
+	  wait "$_s" && kill "$_p" 2>/dev/null ) </dev/null >/dev/null 2>&1 5>&- 6>&- 7>&- 9>&- &
 	_w=$!
 	# The shell reports a killed job on stderr (the daemon log).
 	wait "$_p" 2>/dev/null; _rc=$?
@@ -2554,26 +2590,24 @@ pf_persist_save() {
 	echo "$now" > "$stamp" 2>/dev/null
 }
 
+# One saved list back from flash, when the live one is missing or empty: a
+# temp beside it, then a rename. Any verb can be the first since boot, and
+# two at once (the daemon and a page) must not leave a half-written list for
+# the other to read and save.
+_pf_restore_one() {   # flash copy, live file
+	if [ ! -s "$2" ] && [ -s "$1" ]; then
+		cp "$1" "$2.r.$$" 2>/dev/null && mv "$2.r.$$" "$2" 2>/dev/null
+		rm -f "$2.r.$$" 2>/dev/null
+	fi
+}
 pf_persist_restore() {
 	mkdir -p "$PF_RUN_DIR" 2>/dev/null
-	if [ ! -s "$PF_SERVERS_TSV" ] && [ -s "$PF_PERSIST_DIR/servers.tsv" ]; then
-		cp "$PF_PERSIST_DIR/servers.tsv" "$PF_SERVERS_TSV" 2>/dev/null
-	fi
-	if [ ! -s "$PF_PREFIX_TSV" ] && [ -s "$PF_PERSIST_DIR/prefix.tsv" ]; then
-		cp "$PF_PERSIST_DIR/prefix.tsv" "$PF_PREFIX_TSV" 2>/dev/null
-	fi
-	if [ ! -s "$PF_GEO_CACHE" ] && [ -s "$PF_PERSIST_DIR/geo-cache.tsv" ]; then
-		cp "$PF_PERSIST_DIR/geo-cache.tsv" "$PF_GEO_CACHE" 2>/dev/null
-	fi
-	if [ ! -s "$PF_TELE_HIST" ] && [ -s "$PF_PERSIST_DIR/telemetry.tsv" ]; then
-		cp "$PF_PERSIST_DIR/telemetry.tsv" "$PF_TELE_HIST" 2>/dev/null
-	fi
-	if [ ! -s "$PF_SESS_TSV" ] && [ -s "$PF_PERSIST_DIR/sessions.tsv" ]; then
-		cp "$PF_PERSIST_DIR/sessions.tsv" "$PF_SESS_TSV" 2>/dev/null
-	fi
-	if [ ! -s "$PF_OWNER_TSV" ] && [ -s "$PF_PERSIST_DIR/owner.tsv" ]; then
-		cp "$PF_PERSIST_DIR/owner.tsv" "$PF_OWNER_TSV" 2>/dev/null
-	fi
+	_pf_restore_one "$PF_PERSIST_DIR/servers.tsv"   "$PF_SERVERS_TSV"
+	_pf_restore_one "$PF_PERSIST_DIR/prefix.tsv"    "$PF_PREFIX_TSV"
+	_pf_restore_one "$PF_PERSIST_DIR/geo-cache.tsv" "$PF_GEO_CACHE"
+	_pf_restore_one "$PF_PERSIST_DIR/telemetry.tsv" "$PF_TELE_HIST"
+	_pf_restore_one "$PF_PERSIST_DIR/sessions.tsv"  "$PF_SESS_TSV"
+	_pf_restore_one "$PF_PERSIST_DIR/owner.tsv"     "$PF_OWNER_TSV"
 	# Left by the game names of Ping Filter 2.0.8.3 and older.
 	rm -f "$PF_PERSIST_DIR/games.tsv" "$PF_RUN_DIR/games.tsv" "$PF_RUN_DIR/game-learn.tsv" \
 		"$PF_RUN_DIR/.gamelist" "$PF_RUN_DIR/.dnstap" "$PF_RUN_DIR"/.gdev-* \
@@ -3688,12 +3722,14 @@ _pf_geo_known() {
 
 # Heal cached rows whose geo never resolved (0/0) or that lack both country
 # and city: the flow loop only retries live servers, and in distance mode
-# unresolved means blocked. At most $1 lookups per call (default 2), from the
-# IDLE scan only. Rows with a fresh negative-cache entry are skipped, so one
-# unresolvable IP cannot starve the rest. A healed row is re-graded and
-# seeded. Pinned IPs (whitelist / blacklist) go FIRST, so they can be mapped
-# (pf_servers_json joins them against $PF_GEO_CACHE); skipped once located,
-# never graded (the pin is the verdict).
+# unresolved means blocked. From the IDLE scan only, with no lookup in the
+# call: at most $1 (default 2) locations the cache holds are applied, and as
+# many addresses handed to the background worker (_pf_geo_worker), whose
+# answers a later pass applies. Rows with a fresh negative-cache entry are
+# skipped, so one unresolvable IP cannot starve the rest. A healed row is
+# re-graded and seeded. Pinned IPs (whitelist / blacklist) go FIRST, so they
+# can be mapped (pf_servers_json joins them against $PF_GEO_CACHE); skipped
+# once located, never graded (the pin is the verdict).
 pf_geo_backfill() {
 	local max="${1:-${PF_GEO_PER_PASS:-2}}"
 	[ "${PF_GEOIP_LOOKUP:-yes}" = "yes" ] || return 0
@@ -3734,17 +3770,34 @@ pf_geo_backfill() {
 				OUT[ip] = 1; print ip
 			}
 		}
-	' "$PF_GEO_CACHE" "$PF_SERVERS_TSV" 2>/dev/null | head -"$max")
+	' "$PF_GEO_CACHE" "$PF_SERVERS_TSV" 2>/dev/null | head -n "$((max * 4))")
 	[ -z "$todo" ] && return 0
-	local ip
-	for ip in $todo; do _pf_geo_heal "$ip"; done
+	# A location already in the cache is applied here. One that needs the
+	# network goes to the worker, as in a live pass: a lookup no service
+	# answers takes about 25 s, and this pass holds the scan lock and the
+	# daemon's loop for it (a match that started meanwhile waited that long
+	# for its first verdict). Up to $max of each a pass: what the worker
+	# cached since the last pass is applied without taking the place of
+	# the next lookups.
+	local ip q="" nq=0 nh=0
+	for ip in $todo; do
+		if _pf_geo_fresh "$ip"; then
+			[ "$nh" -lt "$max" ] || continue
+			_pf_geo_heal "$ip"; nh=$((nh + 1))
+		elif [ "$nq" -lt "$max" ]; then
+			q="$q $ip"; nq=$((nq + 1))
+		fi
+	done
+	[ -n "$q" ] && _pf_geo_worker "$q"
+	return 0
 }
 
-# Apply one server's location (the geo cache, else a network lookup paced at
-# 2 s: the scan calls it once the worker has cached it, the idle backfill
-# looks up itself). An unmeasured row takes its estimate; the row is graded
-# again on the shared path (a pin keeps its state, a measured allow is not
-# cut, an estimate allow in a match is blocked after it).
+# Apply one server's location from the geo cache: the scan and the idle
+# backfill call it once the cache holds it (with no cached answer
+# pf_geo_lookup would ask the network, paced at 2 s). An unmeasured row takes
+# its estimate; the row is graded again on the shared path (a pin keeps its
+# state, a measured allow is not cut, an estimate allow in a match is blocked
+# after it).
 _pf_geo_heal() {
 	local ip="$1" geo lat lon country city row ping src
 	geo=$(pf_geo_lookup "$ip")
@@ -3803,6 +3856,20 @@ _pf_geo_nofix() {
 	_pf_geo_down && return 0
 	_pf_geo_fresh "$1" && ! _pf_geo_known "$PF_G_LAT" "$PF_G_LON"
 }
+# The same for a verdict (_pf_classify), counted over more than one retry. A
+# live server's failed lookup is tried again every geo_retry s; asked with
+# that time, "a lookup can still come" turned true for the length of every
+# retry, and a server no service can locate was held and its flows cut (pure
+# distance) or let in (Ping Catch) once a minute. Its own failed lookup
+# counts for the idle backlog's 10 minutes (PF_GEO_NEG emptied: the time
+# _pf_geo_fresh has outside a live pass; a retry that works replaces it).
+# "No service answered" counts for three retry periods: every retry renews
+# it while the services stay down, and once they are back a server never
+# looked up must not skip its lookup for long.
+_pf_geo_gone() {
+	local PF_GEO_NEG="" PF_GEO_RETRY=$((${PF_GEO_RETRY:-60} * 3))
+	_pf_geo_nofix "$1"
+}
 
 # Inside the radius? 0 = inside, 1 = outside, 2 = not known. Inside: the
 # /24's physics bound (its lowest measured RTT x 100 km, fibre both ways)
@@ -3849,7 +3916,7 @@ _pf_ir_fill() {
 #     graded;
 #   - distance (the radius): inside allowed, located outside blocked; not
 #     located: held until it is, or, when no location can come
-#     (_pf_geo_nofix), its own reading against the radius in ms (the link's
+#     (_pf_geo_gone), its own reading against the radius in ms (the link's
 #     km -> ms model, _pf_geo_est);
 #   - distance + Ping Catch (the radius lets servers in, the catch adds
 #     those outside it that measure at or under it): inside allowed; own
@@ -3884,7 +3951,7 @@ _pf_classify() {
 		if [ "$_LIM" -eq 0 ]; then
 			# The radius alone. No location can come: its own reading,
 			# within the radius in ms.
-			if [ "$ir" = 2 ] && [ "$own" = 1 ] && [ -n "$ip" ] && _pf_geo_nofix "$ip"; then
+			if [ "$ir" = 2 ] && [ "$own" = 1 ] && [ -n "$ip" ] && _pf_geo_gone "$ip"; then
 				s=$(_pf_geo_est "$PF_HOME_LAT" "$PF_HOME_LON" "${PF_HOME_RADIUS_KM:-1000}")
 				[ "$rtt" -le "${s%% *}" ] 2>/dev/null && { _CL=allowed; return; }
 			fi
@@ -3897,7 +3964,7 @@ _pf_classify() {
 			[ "$_AV" = allowed ] && _CLG=1
 			[ -n "$_AV" ] && { _CL=$_AV; return; }
 		fi
-		[ "$ir" = 2 ] && [ -n "$ip" ] && ! _pf_geo_nofix "$ip" && { _CL=allowed; return; }
+		[ "$ir" = 2 ] && [ -n "$ip" ] && ! _pf_geo_gone "$ip" && { _CL=allowed; return; }
 	else
 		[ "$_LIM" -gt 0 ] || { _CL=allowed; return; }
 		[ "$cov" = 1 ] && { _CL=blocked; return; }
@@ -4126,6 +4193,9 @@ _pf_probe_async() {
 
 pf_scan_once() {
 	[ "$PF_ENABLED" = "1" ] || return 0
+	# Parked (a runtime Stop, or the master switch off): no daemon grades,
+	# and a table put back by a pass would hold every new server.
+	{ [ "$ENABLED" = "1" ] && [ ! -f "$PF_RUN_DIR/.stopped" ]; } || return 0
 
 	# One timestamp for the pass: the rtt-ingest check runs before the flow
 	# loop and must not rely on a caller's $now.
@@ -4177,7 +4247,7 @@ pf_scan_once() {
 	local flows
 	flows=$(pf_discover_flows)
 	if [ -z "$flows" ]; then
-		# Idle tick: drain the geo backlog (2 lookups max). Age-refresh
+		# Idle tick: drain the geo backlog (2 a pass, by the worker). Age-refresh
 		# probes run without the FIFO; the next pass's ingest takes them.
 		local _inflight=0 _n_probe=0 _pp="" _pfd=-
 		_pf_fresh_sweep
@@ -4365,9 +4435,11 @@ pf_scan_once() {
 			local _hm="" _hn=""
 			read -r _hm _hn < "$PF_RUN_DIR/hs-$f_dst" 2>/dev/null
 			rm -f "$PF_RUN_DIR/hs-$f_dst" 2>/dev/null
-			if _pf_fold "$current_ping" "$current_src" 0 "$_hm" real "${_hn:-1}"; then
+			if _pf_fold "$current_ping" "$current_src" 0 "$_hm" real "${_hn:-1}" "" "$f_dst"; then
 				current_ping=$_F_MS; current_src=$_F_SRC; current_n=$_F_N
 				_pf_prefix_learn "$f_dst" "$_hm" "$lat" "$lon" "$country" "$city"
+			elif [ "$_hm" -gt 0 ] 2>/dev/null; then
+				pf_note "INFO" "ping filter: handshake RTT ${_hm}ms for $f_dst not used yet at first sight - one connect; a second connect confirms it"
 			fi
 		fi
 
@@ -5719,7 +5791,14 @@ pf_uci_list_add() {
 	[ -z "$ip" ] && return 1
 	cur=$(uci -q get "$UCI_CFG.pingfilter.$list_name" 2>/dev/null)
 	for existing in $cur; do
-		[ "$existing" = "$ip" ] && return 0
+		[ "$existing" = "$ip" ] || continue
+		# Listed already: its kernel entry may be gone all the same (the
+		# other list's list_del, just before, takes it out of both sets).
+		case "$list_name" in
+			whitelist) pf_allow_add "$ip" 1 ;;
+			blacklist) pf_block_add "$ip" 1 ;;
+		esac
+		return 0
 	done
 	uci add_list "$UCI_CFG.pingfilter.$list_name=$ip" 2>/dev/null
 	uci commit "$UCI_CFG" 2>/dev/null
@@ -5794,13 +5873,17 @@ _pf_net_mark() {
 	if ! pf_valid_ip4 "$n" || ! [ "$b" -ge 8 ] 2>/dev/null || ! [ "$b" -le 31 ] 2>/dev/null; then
 		err "invalid prefix: $n (IPv4, /8 to /31)"; return 1
 	fi
+	# The state first: a refusal after the del_list lines left them staged,
+	# and the next commit took the prefix off its list.
+	case "$2" in
+		whitelist|blacklist|forget) ;;
+		*) err "a prefix can be whitelisted, blacklisted or forgotten"; return 1 ;;
+	esac
 	pf_load_config
 	uci -q del_list "$UCI_CFG.pingfilter.whitelist=$n" 2>/dev/null
 	uci -q del_list "$UCI_CFG.pingfilter.blacklist=$n" 2>/dev/null
 	case "$2" in
 		whitelist|blacklist) uci -q add_list "$UCI_CFG.pingfilter.$2=$n" ;;
-		forget) ;;
-		*) err "a prefix can be whitelisted, blacklisted or forgotten"; return 1 ;;
 	esac
 	uci commit "$UCI_CFG" 2>/dev/null
 	pf_load_config
@@ -5943,6 +6026,10 @@ pf_scan() {
 # A pass on demand. Off a terminal (an rpcd call) detached: probes and
 # location lookups can outlast the call's timeout.
 _pf_scan_now() {
+	if [ "$ENABLED" != "1" ] || [ "$PF_ENABLED" != "1" ] || [ -f "$PF_RUN_DIR/.stopped" ]; then
+		echo "ping filter: not running - nothing scanned (enable or start it first)"
+		return 0
+	fi
 	if [ -t 1 ]; then
 		pf_scan_once
 		return
@@ -6180,7 +6267,7 @@ pf_servers_json() {
 	    -v geo_file="$PF_GEO_CACHE" \
 	    -v live_file="$PF_LIVE_TSV" \
 	    -v hist_file="$PF_TELE_HIST" -v owner_file="$PF_OWNER_TSV" -v pfx_file="$PF_PREFIX_TSV" \
-	    -v pfx_ttl="${PF_PREFIX_TTL:-0}" -v pstart="$ps" -v mkeep="${PF_MAP_KEEP:-3600}" '
+	    -v pfx_ttl="${PF_PREFIX_TTL:-0}" -v pstart="$ps" -v mkeep="${PF_MAP_KEEP:-3600}" -v jmax="${PF_JSON_MAX:-800}" '
 	# Escapes by concatenation, never a gsub replacement string (BusyBox
 	# 1.38 awk drops the backslash of "\\\"" there -> invalid JSON).
 	function jesc(s,    o, i, c) {
@@ -6347,6 +6434,9 @@ pf_servers_json() {
 				if (d > bkm + 100) gsus = "true"
 			}
 		}
+		# The reply is one ubus message: past its size rpcd loses the bus. A
+		# server with packets now is sent all the same, up to 100 more.
+		if (first >= jmax + 0 && (!(ts > 0 && age < 30) || first >= jmax + 100)) next
 		if (first++) printf ","
 		printf "{\"ip\":\"%s\",\"state\":\"%s\",\"cached\":%s,\"ping\":%d,\"ping_src\":\"%s\",\"ping_source\":\"%s\",\"jitter\":%d,\"loss\":%d,\"lat\":%s,\"lon\":%s,\"country\":\"%s\",\"city\":\"%s\",\"ts\":%d,\"src\":\"%s\",\"connected\":%s,\"expiry_remaining_sec\":%d,\"proto\":\"udp\",\"fam\":\"" (ip ~ /:/ ? "v6" : "v4") "\",\"bps\":%d,\"bytes\":0,\"pps\":%d,\"jitter_live\":%d,\"gap_max\":%d,\"gaps\":%d,\"stall\":%d,\"loss_live\":%d,\"lv\":%d,\"tele\":%s,\"hist_sessions\":%d,\"hist_jitter\":%d,\"hist_jitter_max\":%d,\"hist_loss\":%d,\"hist_pps\":%d,\"hist_dur\":%d,\"hist_gaps\":%d,\"bound_km\":%d,\"geo_suspect\":%s,\"gname\":\"%s\",\"unreach_reason\":\"\"}",
 			jesc(ip), jesc(state), is_cached, ping, jesc(ping_src), jesc(ping_src),
@@ -6810,7 +6900,12 @@ _pf_rundir_safe() {
 
 case "${1:-}" in
 	install|uninstall|version) ;;
-	*) _pf_rundir_safe || { err "ping filter: $PF_RUN_DIR is not this user's own directory - refusing to run (remove it, then restart QoS-Ex)"; exit 1; } ;;
+	*) _pf_rundir_safe || { err "ping filter: $PF_RUN_DIR is not this user's own directory - refusing to run (remove it, then restart QoS-Ex)"; exit 1; }
+	   # First verb since boot: the saved lists come back from flash before
+	   # anything can create an empty live file, which the next save (every
+	   # stop) would copy over them. The stamp by echo, not ":": a failed
+	   # redirection on a special builtin would end the script here.
+	   [ -f "$PF_RUN_DIR/.restored" ] || { pf_persist_restore; echo 1 > "$PF_RUN_DIR/.restored"; } 2>/dev/null ;;
 esac
 
 case "${1:-}" in
