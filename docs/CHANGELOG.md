@@ -5,7 +5,23 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.6 · shaper 3.2.1.9**
+Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.7 · shaper 3.2.1.9**
+
+## Ping Filter 2.0.9.7
+
+Fixes from an audit of the Ping Filter.
+
+- Fixed: in distance mode, a server that no location service could place was cut off about once a minute. Each time its failed lookup was tried again, the Ping Filter went back to "its location may still come" for as long as the lookup took. With the radius alone the server was blocked and its connections cut for that time (measured off the router with no location service answering: 26 seconds of every 82); with Ping Catch a server over the catch was let in for that time. A server being played was kept, but the log said "over the limit while being played", and a second server of the same match could be blocked after it. A server's failed lookup now counts for 10 minutes, or until a retry works, and "no location service answered" for three minutes instead of one; the server is judged on its own ping meanwhile. With the radius alone, a server never looked up is still held until it is located, unless no location service has answered in the last three minutes (it was one minute).
+- Fixed: a match that started while old servers' locations were being looked up could wait about 26 seconds for its first verdict when no location service answered. Those lookups now run in the background, as they do during play.
+- Fixed: the saved server list could be overwritten by an empty one. It happened when a server was marked on the Servers page with the Ping Filter off since boot and QoS-Ex was then stopped, and when a page asked for the servers before the first start after a boot. The saved lists are now read back before anything else runs.
+- Fixed: the running Ping Filter kept the old value of an option that had been deleted from the config until it was restarted.
+- Fixed: with a long server list (`max_servers` raised, about 1,200 servers or more) the list sent to the pages grew past what the router's message bus carries: the request timed out and the QoS-Ex pages stopped getting data. The list sent to a page, and printed by `qos-ex.sh pingfilter servers`, now stops at 800 servers; servers in use beyond that are still sent (up to 100).
+- Fixed: a server could count as "being played" when one of its connections timed out, and the next new server was then let in as a handoff.
+- Fixed: a handshake over the limit for a server whose location lookup had failed a few minutes earlier was used at once when it arrived between two passes, and waited when it arrived during one. It waits in both cases (the 2.0.9.5 rule).
+- Fixed: `qos-ex.sh pingfilter scan` and **Run scan now** with the Ping Filter stopped put its rules back, which held every new server until the next start. They now say it is not running.
+- Fixed: marking a server Always allow or Always block a second time took it out of the kernel's list, so the pin did not apply until the lists were next rebuilt.
+- Fixed: marking a prefix with a state a prefix cannot have (`mark 1.2.3.0/24 allowed`) was refused, but took the prefix off its list at the next save.
+- Fixed: a time-limited helper (a probe or a lookup) could leave a stray process holding the scan lock until its time limit ran out, which delayed the next pass by a few seconds.
 
 ## Ping Filter 2.0.9.6
 
