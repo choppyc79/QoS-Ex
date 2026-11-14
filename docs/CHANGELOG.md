@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.5 · shaper 3.2.1.9**
+Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.6 · shaper 3.2.1.9**
+
+## Ping Filter 2.0.9.6
+
+- Changed: the Ping Filter log no longer gets a handshake line every 20 seconds for the server you are playing on. A game keeps opening new connections to its server, and each was logged with the same ping and one more connect, which filled the log (it keeps 200 lines) in about half an hour of play. A handshake is now logged when its ping or its verdict changes, or when it reaches a second connect.
 
 ## Ping Filter 2.0.9.5
 
