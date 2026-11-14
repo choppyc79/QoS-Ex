@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.0.9.5"
+VERSION="2.0.9.6"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -1041,9 +1041,12 @@ _pf_owner_put() {
 
 # Fold handshake readings into rows and kernel sets (_pf_reading; pins keep
 # their verdict and take the value). Runs from pf_scan_once (reads its $now).
+# A played server is timed again on every connect (a game opens new flows
+# all the time, one counted every tele_gap s): only a new figure, a new
+# verdict or the second connect is logged.
 _pf_hs_ingest() {
 	[ "${PF_HS_RTT:-0}" = "1" ] || return 0
-	local f ip ms n ex _w
+	local f ip ms n ex _w _op _os _on
 	for f in "$PF_RUN_DIR"/hs-*; do
 		[ -f "$f" ] || continue
 		ip=${f##*/hs-}
@@ -1059,7 +1062,11 @@ _pf_hs_ingest() {
 			continue
 		fi
 		rm -f "$f" 2>/dev/null
+		_pf_row "$ex"; _op=$PF_C_PING; _os=$PF_C_SRC; _on=0
+		[ "$_os" = real ] && _on=$PF_C_LOSS
 		if _pf_reading "$ip" "$ms" real "${n:-1}" 1; then
+			[ "$_os" = real ] && [ "$_F_MS" = "$_op" ] && [ "$_V" = "$_V_OLD" ] \
+				&& { [ "$_on" -ge 2 ] 2>/dev/null || [ "$_F_N" -lt 2 ] 2>/dev/null; } && continue
 			pf_note "INFO" "ping filter: handshake RTT ${ms}ms for $ip ($_V, ${n:-1} connect(s))"
 		elif ! _pf_src_measured "$PF_C_SRC"; then
 			_pf_lim
