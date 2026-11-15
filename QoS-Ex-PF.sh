@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.0.9.8"
+VERSION="2.0.9.9"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -942,7 +942,9 @@ pf_due_apply() {
 #   - A new server under the hold: its first first_pkts packets pass, so the
 #     first exchange is timed (_pf_hold_on).
 # Output: $PF_RUN_DIR/hs-<ip> = "min_ms connects", written when either moves.
-# Scope matches @pf_seen.
+# Scope: game-port UDP from the devices to any IPv4 address (no private
+# filter, unlike @pf_seen): a file no server row claims goes after 60 s
+# (_pf_hs_ingest).
 pf_hs_listen() {
 	_pf_exec_as qos-ex-pf-handshake conntrack -E -p udp -e NEW,UPDATES,DESTROY -o timestamp 2>/dev/null | \
 	awk -v qos_ex_pf=handshake -v gips="$GAMING_IP4" -v pmin="${PF_UDP_PORT_MIN:-1024}" -v dir="$PF_RUN_DIR" -v ign="$PF_IGNORE_AWK" \
@@ -1414,10 +1416,11 @@ _pf_port_match() {
 # The new-server hold, by mode, into _HOLD (1 = none):
 #   full   game UDP to a server with no verdict is dropped: pure distance
 #          (held until located), and any mode with a country list;
-#   first  the first first_pkts packets of each flow pass, so conntrack
-#          times the game's handshake, the rest wait until graded: a ping
-#          limit, or distance + Ping Catch. first_pkts 0 = no hold (a new
-#          server is allowed until graded);
+#   first  the first first_pkts packets of each flow the device opens
+#          pass, so conntrack times the game's handshake, the rest wait
+#          until graded: a ping limit, or distance + Ping Catch. A flow a
+#          server opens is not held (it cannot be timed). first_pkts 0 = no
+#          hold (a new server is allowed until graded);
 #   none   watch only (ping limit 0) without a country list.
 _pf_hold_on() {
 	_HOLD=""
@@ -1433,8 +1436,11 @@ _pf_hold_on() {
 # The table as text. v6 objects only when a v6 device is monitored (a v6-less
 # kernel would fail the whole file).
 _pf_table_body() {
-	local _PM _HOLD _pk="" v6=0 g=$PF_GAMING_SET_NAME a=$PF_ALLOWED_SET_NAME b=$PF_SET_NAME
+	local _PM _HOLD _pk="" _ignd="" _igns="" v6=0 g=$PF_GAMING_SET_NAME a=$PF_ALLOWED_SET_NAME b=$PF_SET_NAME
 	_pf_port_match
+	# The activity counters leave the ignored ports out, as discovery does:
+	# a call on them is not play.
+	[ -n "$PF_IGNORE_NFT" ] && { _ignd=" udp dport != { $PF_IGNORE_NFT }"; _igns=" udp sport != { $PF_IGNORE_NFT }"; }
 	[ -n "$GAMING_IP6" ] && v6=1
 	echo "table $PF_FW_TABLE {"
 	echo "	set $g { type ipv4_addr; }"
@@ -1466,13 +1472,13 @@ _pf_table_body() {
 	echo "		ip6 saddr != @$PF_GAMING_SET_NAME6 ip6 daddr != @$PF_GAMING_SET_NAME6 return"
 	echo "		ip saddr @$g counter name pf_all"
 	echo "		ip daddr @$g counter name pf_all"
-	echo "		ip saddr @$g udp dport >= ${PF_UDP_PORT_MIN:-1024} counter name pf_udp"
-	echo "		ip daddr @$g udp sport >= ${PF_UDP_PORT_MIN:-1024} counter name pf_udp"
+	echo "		ip saddr @$g udp dport >= ${PF_UDP_PORT_MIN:-1024}$_ignd counter name pf_udp"
+	echo "		ip daddr @$g udp sport >= ${PF_UDP_PORT_MIN:-1024}$_igns counter name pf_udp"
 	if [ "$v6" = 1 ]; then
 		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 counter name pf_all"
 		echo "		ip6 daddr @$PF_GAMING_SET_NAME6 counter name pf_all"
-		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 udp dport >= ${PF_UDP_PORT_MIN:-1024} counter name pf_udp"
-		echo "		ip6 daddr @$PF_GAMING_SET_NAME6 udp sport >= ${PF_UDP_PORT_MIN:-1024} counter name pf_udp"
+		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 udp dport >= ${PF_UDP_PORT_MIN:-1024}$_ignd counter name pf_udp"
+		echo "		ip6 daddr @$PF_GAMING_SET_NAME6 udp sport >= ${PF_UDP_PORT_MIN:-1024}$_igns counter name pf_udp"
 	fi
 	echo "		meta l4proto udp ip saddr @$g $_PM ip daddr != $PF_PRIV4 update @$PF_SEEN_SET_NAME { ip daddr }"
 	[ "$v6" = 1 ] && \
@@ -1513,10 +1519,12 @@ _pf_table_body() {
 	# Hold: a game-port UDP packet to a public address with no verdict stops
 	# here; "first" only past the flow's first first_pkts packets (conntrack
 	# accounting, which the daemon turns on: without it the count reads 0
-	# and nothing is held). Outbound only; IPv4 only (IPv6 servers are not
-	# graded).
+	# and nothing is held), and only on a flow the device opened: on one a
+	# server opened (port forward, UPnP, a P2P host) the count would be the
+	# server's packets, and no handshake is timed there. Outbound only; IPv4
+	# only (IPv6 servers are not graded).
 	if _pf_hold_on; then
-		[ "$_HOLD" = first ] && _pk=" ct original packets > ${PF_FIRST_PKTS:-2}"
+		[ "$_HOLD" = first ] && _pk=" ct direction original ct original packets > ${PF_FIRST_PKTS:-2}"
 		echo "		ip saddr @$g meta l4proto udp $_PM ip daddr != $PF_PRIV4$_pk counter drop comment \"pf-hold\""
 	fi
 	echo "	}"
