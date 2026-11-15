@@ -318,6 +318,18 @@ app_calls() {
 	else
 		skip "peek: the mark is there now (a QoS-Ex page is open), or the Ping Filter has no run directory"
 	fi
+	# 1.4.0.2: live reads the queue from the start stamp (HFSC / HTB skip the
+	# JSON probe).
+	q=$(sv QDISC); r=$(ubus call qos-ex live 2>/dev/null)
+	case "$q" in
+		hfsc|htb) [ -n "$(jsonfilter -s "$r" -e '@.tc.egress.text' 2>/dev/null)" ] && pass "live: the $q classes as text, by the start stamp (1.4.0.2)" \
+			|| fail "live: no $q text in the reply" ;;
+		cake) case "$r" in *'"kind":"cake"'*) pass "live: CAKE as tc JSON (1.4.0.2)" ;; *) fail "live: no CAKE in the reply" ;; esac ;;
+		*) skip "live: the shaper is not running" ;;
+	esac
+	a=$(cs); i=0; while [ $i -lt 10 ]; do ubus call qos-ex live >/dev/null 2>&1; i=$((i + 1)); done
+	b=$(cs)
+	info "live (Stats asks every second), average of 10: $((b - a)) ms"
 	# What one poll costs: the banner asks state, the Flows page conntrack.
 	a=$(cs); i=0; while [ $i -lt 10 ]; do "$Q" state >/dev/null 2>&1; i=$((i + 1)); done
 	b=$(cs); i=0; while [ $i -lt 10 ]; do "$Q" conntrack 50 >/dev/null 2>&1; i=$((i + 1)); done
@@ -348,6 +360,22 @@ pingfilter() {
 		[ "$(pfk running)" = 1 ] && pass "daemon running" || fail "on, but the daemon is not running"
 		r=$(nft list chain inet qos_ex_pf enforce 2>/dev/null | sed -n '/hook forward/{n;s/^[[:space:]]*//;p;q}')
 		[ "$r" = "meta l4proto != udp return" ] && pass "enforce starts with the UDP gate (2.0.9.0)" || fail "enforce starts with: ${r:-nothing}"
+		# 2.0.9.9: the activity counters leave out the ports discovery leaves
+		# out, and the first-packets hold holds only flows the device opened.
+		c1=$(nft list chain inet qos_ex_pf seen 2>/dev/null)
+		if printf '%s\n' "$c1" | grep 'update @' | grep -q 'dport != '; then
+			n1=$(printf '%s\n' "$c1" | grep -c pf_udp); k1=$(printf '%s\n' "$c1" | grep pf_udp | grep -c -E '[ds]port != ')
+			[ "$n1" -gt 0 ] && [ "$k1" = "$n1" ] && pass "the activity counters leave out the ignored ports, as discovery does (2.0.9.9)" \
+				|| fail "the activity counters count the ignored ports ($k1 of $n1 counter rules leave them out)"
+		else
+			info "no ignored ports: nothing to leave out of the activity counters"
+		fi
+		case "$(nft list chain inet qos_ex_pf enforce 2>/dev/null | grep pf-hold)" in
+			*'ct direction original ct original packets'*) pass "first-packets hold: only flows the device opened (2.0.9.9)" ;;
+			*'ct original packets'*) fail "first-packets hold also holds flows a server opened (no ct direction original)" ;;
+			'') info "no new-server hold (watch only, or first_pkts 0)" ;;
+			*) info "new-server hold: full hold" ;;
+		esac
 		# Ping Catch (2.0.9.8): a server whose own ping is over the catch is let
 		# in only inside the radius, or while it is played (blocked after it).
 		# The Ping Filter's own functions, in a subshell: nothing is written.
@@ -389,6 +417,10 @@ logs() {
 	n=$(logread 2>/dev/null | grep -i 'qos-ex' | grep -ciE 'error|fail')
 	info "$n system-log line(s) from QoS-Ex with error or fail"
 	logread 2>/dev/null | grep -i 'qos-ex' | grep -iE 'error|fail' | tail -n 5 | ind
+	# Shaper 3.2.2.1: the debug report carries the system-log lines.
+	"$Q" debug > "$T/debug" 2>&1
+	grep -q '^--- system log (QoS-Ex' "$T/debug" && pass "the debug report carries QoS-Ex's system-log lines (shaper 3.2.2.1)" \
+		|| fail "no system-log part in the debug report"
 }
 
 match() {
@@ -569,7 +601,7 @@ main() {
 		case "$a" in
 			match) match ;;
 			reload|burst|restart|ifb|branch|redial|rules|queue|update) "test_$a" ;;
-			debug) sec "Debug report (sanitized)"; "$Q" debug 2>&1 ;;
+			debug) sec "Debug report (sanitized)"; cat "$T/debug" 2>/dev/null || "$Q" debug 2>&1 ;;
 			*) sec "Unknown argument: $a" ;;
 		esac
 	done

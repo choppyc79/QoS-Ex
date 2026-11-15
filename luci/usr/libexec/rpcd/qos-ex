@@ -343,9 +343,6 @@ as_result() {
 	echo "now=${_u%.*}"
 }
 
-# Per-qdisc / per-class detail straight from `tc -s -j` (the live method):
-# CAKE per-tin delays, flows and marks; HFSC/HTB as plain tc -s text (see
-# live). Read-only, no backend fork.
 # The @@COUNTERS@@ block for `counters` and `live`: the live library the
 # install sliced from the backend (lib live.sh) with the values the start
 # stamp recorded, so a poll parses no 200 KB script. The backend answers as
@@ -375,9 +372,16 @@ emit_counters() {
 	"$QOS_EX_BIN" counters
 }
 
+# Per-qdisc / per-class detail straight from `tc -s -j` (the live method):
+# CAKE per-tin delays, flows and marks; HFSC/HTB as plain tc -s text (see
+# live). Read-only, no backend fork. The queue the start stamp names
+# picks the reader: HFSC / HTB skip the JSON probe, which only ever finds
+# CAKE. No stamp (or one without QDISC=): each device is probed.
 emit_tc() {
-	_w=$(sed -n 's/^WAN=//p' /var/run/qos-ex-started 2>/dev/null)
-	_i=$(sed -n 's/^IFB=//p' /var/run/qos-ex-started 2>/dev/null)
+	_w=""; _i=""; _k=""
+	[ -f /var/run/qos-ex-started ] && while IFS='=' read -r _a _b; do
+		case "$_a" in WAN) _w=$_b ;; IFB) _i=$_b ;; QDISC) _k=$_b ;; esac
+	done < /var/run/qos-ex-started
 	[ -n "$_w" ] || _w=$(uci -q get "$UCI_PKG".settings.wan 2>/dev/null)
 	[ -n "$_i" ] || _i="ifb-$_w"
 	case "$_w$_i" in ''|*[!A-Za-z0-9._@-]*) printf '{"error":"bad interface name"}'; return 1 ;; esac
@@ -387,8 +391,10 @@ emit_tc() {
 		printf '[]'
 	}
 	tcdev() {
-		_q=$(tcj qdisc "$1")
-		case "$_q" in *'"kind":"cake"'*) printf '{"qdisc":%s,"text":""}' "$_q"; return ;; esac
+		if [ "$_k" != hfsc ] && [ "$_k" != htb ]; then
+			_q=$(tcj qdisc "$1")
+			case "$_q" in *'"kind":"cake"'*) printf '{"qdisc":%s,"text":""}' "$_q"; return ;; esac
+		fi
 		printf '{"qdisc":[],"text":'
 		{ tc -s qdisc show dev "$1"; tc -s class show dev "$1"; } 2>/dev/null | awk '
 			function jesc(s,    o, i, c) {

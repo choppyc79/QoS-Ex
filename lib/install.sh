@@ -537,7 +537,7 @@ start_service() {
 	procd_set_param respawn 3600 5 0
 	procd_set_param pidfile "\$PF_PID_FILE"
 	# stdout 0: the daemon used to have every routine message copied into
-	# syslog as daemon.info by this capture. Since PF 2.8.0 it stays quiet
+	# syslog as daemon.info by this capture. Since PF 2.0.8.0 it stays quiet
 	# on stdout and writes to the QoS-Ex logs instead. stderr is still
 	# captured so a hard shell-level failure is not invisible.
 	procd_set_param stdout 0

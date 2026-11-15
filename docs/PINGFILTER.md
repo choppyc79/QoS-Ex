@@ -97,9 +97,9 @@ unpin), or use **Add a server** with an address or a range such as
 ### Keep voice chat out of the server list
 
 **Settings → Advanced options → Network → Ignore UDP ports**: ports never
-treated as game servers. The default `3478-3481` covers STUN and party
-chat. Add your voice chat's ports, e.g. Discord `50000-65535`, unless your
-game uses them.
+treated as game servers, and a call on them does not count as a game. The
+default `3478-3481` covers STUN and party chat. Add your voice chat's
+ports, e.g. Discord `50000-65535`, unless your game uses them.
 
 ### Switch to another game
 
@@ -154,9 +154,11 @@ Ping Filter log on **System → Logs**.
 ## 6. How a server is judged
 
 1. **New server.** With a ping limit or Ping Catch, its first 2 packets pass
-   so the game's first exchange is timed, then it waits until graded. In
-   distance mode without Ping Catch, or with a country list, it waits from
-   its first packet until located. Watch only holds nothing.
+   so the game's first exchange is timed, then it waits until graded. A
+   server that opens the connection to your device (a port forward, UPnP,
+   a peer-to-peer host) is let through until graded: that exchange cannot
+   be timed. In distance mode without Ping Catch, or with a country list,
+   it waits from its first packet until located. Watch only holds nothing.
 2. **Its ping.** A short ICMP ping burst (the median) and the game's first
    exchange. A server that ignores ping gets an estimate from measured
    servers in its /24, then its area (150 km), then its distance. An
@@ -184,7 +186,9 @@ Ping Filter log on **System → Logs**.
    Dashboard and Map controls, **Always block**, **New game** and **Clear
    cache** act at once.
 6. **Graded by playing**: when you stop playing on a server, the ping
-   measured during play becomes its figure and it is graded again.
+   measured during play becomes its figure and it is graded again. A
+   figure from the game's first exchange stays when it is at or under the
+   limit or was timed on two connects.
 
 A server on a game company's own network shows the company (Riot Games,
 Valve, Blizzard, Ubisoft, Activision, EA, Epic Games, …), from its location
@@ -271,10 +275,10 @@ range-checks every number.
 | `home_radius_km` | `1000` | Distance-mode radius, 50–20000 |
 | `ping_catch_ms` | `0` | Distance mode, 0–250: outside the radius, servers whose ping is at or under this are let in too. Inside the radius every server is. `0` = the radius alone decides |
 | `ping_var_pct` | `5` | Margin on both limits, 0–50 (80 ms passes up to 84 ms) |
-| `first_pkts` | `2` | With a ping limit or Ping Catch: packets of a new server's flow let through so the game's first exchange is timed; the rest wait until it is graded (0–20). `0` = no hold: a new server is let through until graded. Not in the web app |
+| `first_pkts` | `2` | With a ping limit or Ping Catch: packets of a new server's flow let through so the game's first exchange is timed; the rest wait until it is graded (0–20). Only flows your device opens are held. `0` = no hold: a new server is let through until graded. Not in the web app |
 | `whitelist` / `blacklist` | *(lists)* | **Always allow** / **Always block**: an address or a range (`1.2.3.0/24`) |
 | `allow_country` | *(list)* | Country names as the server list shows them (`United Kingdom`). When set, servers elsewhere are blocked |
-| `ignore_ports` | `3478-3481` | UDP ports never treated as game servers. Add your voice-chat ports (e.g. Discord 50000-65535) unless your game's servers use them |
+| `ignore_ports` | `3478-3481` | UDP ports never treated as game servers, and not counted as play. Add your voice-chat ports (e.g. Discord 50000-65535) unless your game's servers use them |
 | `auto_pin` | `2` | 0–20. Once a /24 holds this many Always allow (or Always block) servers, new ones in it join the list. With Ping Catch, a server without its own ping goes with the measured servers in its /24 and area (150 km): more under the catch than confirmed over, with one of them in its /24 or this many in the area, lets it in; this many confirmed over (the game's exchange over the catch on two connects, or a country not allowed) and none under keeps it out. 0 = off |
 | `geoip_lookup` | `yes` | Look up server locations. New servers' addresses go to `get.geojs.io` together, up to 50 in one HTTPS request; any it cannot place to a city are sent one by one to the lookup services, in turn until one answers: `ipwho.is`, `get.geojs.io`, `freeipapi.com`, `ipapi.co` (all HTTPS), then `geoip_api`. `no` = no lookups: servers have no map position, and distance mode has no location to work from |
 | `geoip_api` | `http://ip-api.com/json` | The last lookup service (plain HTTP). Set it to a service of your own and only that one is asked |

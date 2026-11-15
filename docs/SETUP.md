@@ -12,7 +12,9 @@ described in [LUCI-GUIDE.md](LUCI-GUIDE.md).
 You need:
 
 - OpenWrt **24.10 or newer** (fw4 / nftables): 24.10 uses `opkg`, 25.12
-  uses `apk`; QoS-Ex works with either.
+  uses `apk`; QoS-Ex works with either. Only OpenWrt itself is supported,
+  not vendor firmware built on it (GL.iNet's, for example) or forks such
+  as ImmortalWrt.
 - SSH access as root, for the install.
 - An internet connection on the router (the installer downloads packages).
 - LuCI, for the web app.
@@ -282,7 +284,10 @@ erases the settings and turns QoS-Ex off; it then opens on **Auto Setup**.
 **Remove.** **System → Maintenance → Danger zone → Uninstall QoS-Ex**
 removes the shaper, Ping Filter, the web app, the settings, the server
 history and the copies in `/root`. Installed packages stay, and flow
-offloading goes back the way QoS-Ex found it.
+offloading goes back the way QoS-Ex found it. One small menu file stays,
+so an old QoS-Ex bookmark opens Status → Overview instead of an error;
+`rm /usr/share/luci/menu.d/luci-app-qos-ex.json /tmp/luci-indexcache*`
+removes it.
 
 ---
 

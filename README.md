@@ -20,7 +20,8 @@ Gaming-focused traffic shaping and game-server filtering for OpenWrt
 ## Requirements
 
 - OpenWrt 24.10 or newer (fw4 / nftables): 24.10 with `opkg`, 25.12 with
-  `apk`.
+  `apk`. Only OpenWrt itself is supported, not vendor firmware built on it
+  (GL.iNet's, for example) or forks such as ImmortalWrt.
 - A router fast enough to shape your line in software.
 - LuCI, for the web app.
 

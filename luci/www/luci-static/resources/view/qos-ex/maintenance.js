@@ -65,13 +65,14 @@ return view.extend({
 			var text = checkPre.textContent || '';
 			return (!text || text.charAt(0) === '(') ? null : text;
 		}
-		// Forum post: two lines to fill in, then the report in a code block.
+		// Forum post: three lines to fill in, then the report in a code block.
 		// Plain Markdown, so it pastes into the OpenWrt forum, Reddit and
 		// GitHub alike. A four-backtick fence survives any ``` in the report.
 		var FORUM_MAX = 30000;
 		function forumText(text) {
 			return '**QoS-Ex problem report**\n\n' +
 				'**What went wrong:** (what you did, what you expected, what happened instead)\n\n' +
+				'**Line:** (fibre, cable, DSL, mobile or satellite)\n\n' +
 				'**Game and device:** (for example Fortnite on PS5, wired - delete this line if it is not about a game)\n\n' +
 				'**Debug report:**\n\n````text\n' + text.replace(/\s+$/, '') + '\n````\n';
 		}
@@ -88,7 +89,7 @@ return view.extend({
 				window.setTimeout(function() { btn.textContent = label; }, 1500);
 				if (ok && forum) h.setText(forumNote, text.length > FORUM_MAX
 					? _('Copied %d characters. Too long for a post? Save .txt and attach it.').format(text.length)
-					: _('Copied %d characters. Paste it into a post and fill in the top two lines.').format(text.length));
+					: _('Copied %d characters. Paste it into a post and fill in the three lines at the top.').format(text.length));
 			}
 			if (navigator.clipboard && navigator.clipboard.writeText) {
 				navigator.clipboard.writeText(text).then(function() { done(true); },
@@ -181,6 +182,10 @@ return view.extend({
 		}
 		var updGrid = E('div', { 'class': 'qos-ex-upd' });
 		var updNote = E('span', { 'class': 'qos-ex-muted' }, _('Checking GitHub…'));
+		// The changelog of the branch updates come from (a link: nothing is
+		// fetched); paintUpd follows the branch.
+		var lnkLog = E('a', { 'href': repo + '/blob/main/docs/CHANGELOG.md', 'target': '_blank', 'rel': 'noopener' },
+			_('Changelog →'));
 		// An update shows its progress here; its output is on System -> Logs.
 		var progTxt = E('span'), progPct = E('strong', { 'style': 'float:right' }), progBar = E('i');
 		var updProg = E('div', { 'style': 'display:none;margin-top:10px' }, [ E('div', {}, [ progTxt, progPct ]),
@@ -261,6 +266,7 @@ return view.extend({
 		function paintUpd() {
 			var r = upd || {}, sw = switching(), newer = sw ? differs() : h.updNewer(r, LOCAL);
 			if (r.branch) selBr.value = r.branch;
+			lnkLog.href = repo + '/blob/' + encodeURIComponent(r.branch || 'main') + '/docs/CHANGELOG.md';
 			var kids = [ _('Component'), _('Installed'), r.branch ? _('Latest (%s)').format(r.branch) : _('Latest'), '' ].map(function(t) {
 				return E('div', { 'class': 'qos-ex-upd-h' }, t);
 			});
@@ -400,7 +406,7 @@ return view.extend({
 				E('span', { 'class': 'qos-ex-tools' }, E('a', { 'href': repo, 'target': '_blank', 'rel': 'noopener' },
 					_('GitHub →'))) ]),
 			updGrid,
-			E('div', { 'class': 'qos-ex-upd-bar' }, [ btnChk, btnUpd, updNote,
+			E('div', { 'class': 'qos-ex-upd-bar' }, [ btnChk, btnUpd, lnkLog, updNote,
 				E('label', { 'title': _('Check GitHub when QoS-Ex is opened, at most once an hour') },
 					[ cbAuto, _('Check automatically') ]) ]),
 			updProg, updFail,
@@ -529,7 +535,7 @@ return view.extend({
 				E('div', {}, _('Uninstall')),
 				E('div', {}, [ btnUninst,
 					E('div', { 'class': 'cbi-value-description' },
-						_('Removes QoS-Ex completely. Packages and flow offloading are left as before.')) ])
+						_('Removes QoS-Ex. Installed packages stay; flow offloading goes back as it was.')) ])
 			])
 		]);
 
