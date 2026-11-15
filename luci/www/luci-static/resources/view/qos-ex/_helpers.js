@@ -251,17 +251,6 @@ function cachePut(key, v) {
 	catch (e) {}
 }
 
-// A light poll verb (backend 3.0.6.0+), falling back to the full one when
-// the reply lacks its marker -- an older backend answers an unknown verb
-// with its usage text -- or the call fails outright.
-function lightOr(light, full, mark) {
-	return function() {
-		return light().then(function(r) {
-			return (r && String(r.output || '').indexOf(mark) >= 0) ? r : full();
-		}, function() { return full(); });
-	};
-}
-
 // Every successful reply refreshes the cache, whichever view made the call.
 function cacheTap(key, fn) {
 	return function() {
@@ -503,13 +492,11 @@ var PF_STATE_TXT = { allowed: _('allowed'), blocked: _('blocked'), whitelist: _(
 return baseclass.extend({
 	callStatus:    cacheTap('status', rpc.declare({ object: 'qos-ex', method: 'status' })),
 	// Poll-sized versions of status and stats: the runtime flags only, and
-	// the counters only. See state() / counters() in QoS-Ex.sh.
-	callState:     cacheTap('state', lightOr(
-		rpc.declare({ object: 'qos-ex', method: 'state'  }),
-		rpc.declare({ object: 'qos-ex', method: 'status' }), '@@STATE@@')),
-	callCounters:  lightOr(
-		rpc.declare({ object: 'qos-ex', method: 'counters' }),
-		rpc.declare({ object: 'qos-ex', method: 'stats'    }), '@@COUNTERS@@'),
+	// the counters only. See state() / counters() in QoS-Ex.sh. A failed
+	// call is not asked again with the full verb: that is the heaviest call,
+	// at the moment the router is slowest to answer.
+	callState:     cacheTap('state', rpc.declare({ object: 'qos-ex', method: 'state' })),
+	callCounters:  rpc.declare({ object: 'qos-ex', method: 'counters' }),
 	callLive:      rpc.declare({ object: 'qos-ex', method: 'live' }),
 	callNfterr:    cacheTap('nfterr', rpc.declare({ object: 'qos-ex', method: 'nfterr' })),
 	callLogdump:   rpc.declare({ object: 'qos-ex', method: 'logdump',   params: [ 'lines', 'src' ] }),
@@ -541,8 +528,8 @@ return baseclass.extend({
 	callPfSessions: rpc.declare({ object: 'qos-ex', method: 'pf_sessions' }),
 	callCfgExport: rpc.declare({ object: 'qos-ex', method: 'cfg_export' }),
 	callCfgImport: rpc.declare({ object: 'qos-ex', method: 'cfg_import', params: [ 'data' ] }),
-	// Updates: latest versions on GitHub main (cached on the router), the
-	// one-click upgrade (write ACL) and its log.
+	// Updates: latest versions on the update branch, main or dev (cached on
+	// the router), the one-click upgrade (write ACL) and its log.
 	callUpdateCheck: rpc.declare({ object: 'qos-ex', method: 'update_check', params: [ 'force', 'inst' ] }),
 	callUpdateCfg:   rpc.declare({ object: 'qos-ex', method: 'update_cfg', params: [ 'on' ] }),
 	callUpdateBranch: rpc.declare({ object: 'qos-ex', method: 'update_branch', params: [ 'branch' ] }),
@@ -1361,16 +1348,11 @@ return baseclass.extend({
 	// every five seconds.
 	// Counters and tc in one call (Stats, Overview): resolves
 	// [ counters reply (rpcSafe-shaped, _err on failure), tc reply | null ].
-	// A counters reply without the @@COUNTERS@@ block goes through
-	// callCounters, whose fallback to the full stats verb it keeps.
 	liveSample: function() {
-		var self = this;
 		return this.rpcSafe(this.callLive(), { output: '' }).then(function(r) {
 			if (r._err) return [ r, null ];
 			var tc = (r.tc && typeof r.tc === 'object' && !r.tc.error) ? r.tc : null;
-			var c = r.counters || { output: '' };
-			if (String(c.output || '').indexOf('@@COUNTERS@@') >= 0) return [ c, tc ];
-			return self.rpcSafe(self.callCounters()).then(function(c2) { return [ c2, tc ]; });
+			return [ r.counters || { output: '' }, tc ];
 		});
 	},
 
