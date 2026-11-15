@@ -164,8 +164,9 @@ Ping Filter log on **System → Logs**.
 3. **A reading only lowers the figure.** One slow ping does not block a
    server that measured under the limit. **Re-check cache** and play can
    raise it. The game's first exchange over the limit, on a server whose
-   estimate is under it, counts only on two separate connects: a server
-   blocked on one slow reply would never be timed again. With no limit
+   estimate is under it or that has no estimate yet while its location is
+   still coming, counts only on two separate connects: a server blocked on
+   one slow reply would never be timed again. With no limit
    (Watch only, or distance without Ping Catch), one more than twice the
    estimate plus 50 ms waits for a second connect too: a first reply that
    slow is the server's own delay, not the distance. A first ping more
@@ -174,8 +175,10 @@ Ping Filter log on **System → Logs**.
    ping figure older than three days is measured again while you are not
    playing, so a route that got slower shows.
 4. **Ping Catch** (distance mode): inside the radius every server is let
-   in. Outside it, a ping at or under the catch lets it in; a server with no
-   ping of its own goes with the measured servers in its /24 and area.
+   in. Outside it, a ping at or under the catch lets it in and a ping over
+   it keeps it out, also while its location is still coming (once located
+   inside the radius, it is let in). A server with no ping of its own goes
+   with the measured servers in its /24 and area.
 5. **While you play on it**, Ping Filter's own re-grades never cut the
    server: a block waits until 30 s after its last game packet. The
    Dashboard and Map controls, **Always block**, **New game** and **Clear

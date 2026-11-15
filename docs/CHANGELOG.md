@@ -5,7 +5,15 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.7 · shaper 3.2.2.0**
+Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.8 · shaper 3.2.2.0**
+
+## Ping Filter 2.0.9.8
+
+- Fixed: with Ping Catch on, a server outside the radius whose own ping was over the catch was let in while its location had not come yet. The far regions a game pings during matchmaking are seen only for a moment, and they stayed let in that way (seen on a router with a 105 ms catch: 30 servers at 114 to 274 ms let in, none of them located). They now stay out. One that turns out to be inside the radius is let in once it is located.
+- Fixed: with Ping Catch on, a server whose own ping was over the catch was also let in when the measured servers in its /24 or its area (150 km) were under it. Those servers now decide only for a server with no ping of its own, as [PINGFILTER.md](PINGFILTER.md#6-how-a-server-is-judged) says.
+- Changed: with Ping Catch on, the game's first exchange over the catch on one connect waits for a second connect while the server has no estimate yet and its location is still coming, as in ping mode since 2.0.9.5. Without it, one slow first reply could keep a good server out for good.
+- Removed: the "slow session" count, which only served the old rule of the second fix. A server is still graded on its play: its in-play ping becomes its figure when the game ends.
+- Not changed: inside the radius every server is let in; a server you are playing on is kept until 30 s after the game; **Ping tolerance** still applies to the catch (5% lets a 105 ms catch pass 110 ms); ping mode, Watch only and the radius alone work as before. Servers let in by the old rules are graded again when the update restarts the Ping Filter.
 
 ## Shaper 3.2.2.0
 
