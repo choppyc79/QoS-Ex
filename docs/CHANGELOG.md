@@ -5,7 +5,25 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.1 · Ping Filter 2.0.9.8 · shaper 3.2.2.0**
+Current: **LuCI app 1.4.0.2 · Ping Filter 2.0.9.9 · shaper 3.2.2.1**
+
+## LuCI app 1.4.0.2
+
+- Changed: when the router is too busy to answer a page's refresh in time, the page no longer asks again with the full status (or statistics) call. That retry was QoS-Ex's heaviest call, sent from every open tab at the moment the router was slowest.
+- Changed: under HFSC or HTB, **Live → Stats** costs the router less each second: the queue type comes from what the shaper recorded at its start, not from a query of each device first.
+- Added: **Changelog →** beside **Update now** on **System → Maintenance**: this changelog on GitHub, for the branch your updates come from.
+- Changed: **Copy for forum** asks for your line type (fibre, cable, DSL, mobile or satellite).
+- Fixed: the note under **Uninstall QoS-Ex** said flow offloading is "left as before". It goes back the way QoS-Ex found it.
+
+## Ping Filter 2.0.9.9
+
+- Fixed: a voice or video call on an ignored port (**Ignore UDP ports**, `3478-3481` by default) from a watched device counted as a game. At 20 packets a second or more the Ping Filter took it for a match: it scanned every second and the pages warned "A game is on". Traffic on the ignored ports no longer counts, as it already did not count when servers are found.
+- Fixed: with a ping limit or Ping Catch, a connection that a server opened to a watched device (a port forward, UPnP, a peer-to-peer host) was held after the server's first two packets. The device's replies were dropped until the server was graded, and that connection's first exchange was never timed. Only connections the device opens are held now; a server that opens one is let through until it is graded, and blocked then if it is over the limit.
+
+## Shaper 3.2.2.1
+
+- Changed: the debug report (**Copy report**, **Copy for forum**) has QoS-Ex's last 20 lines from the system log: the handling of a line drop ("restarting QoS-Ex in 5s", "already shaping"), starts, stops and errors. A report of shaping stopping after the line dropped now shows whether QoS-Ex started again.
+- Changed: a rule set is loaded in one nft pass, without a test load first. The load replaces the old rules in one step, so a bad rule set still changes nothing. A failed load is logged as "failed" (a failed test load read "FAILED VALIDATION").
 
 ## Ping Filter 2.0.9.8
 
