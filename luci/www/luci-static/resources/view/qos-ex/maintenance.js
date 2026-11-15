@@ -89,7 +89,7 @@ return view.extend({
 				window.setTimeout(function() { btn.textContent = label; }, 1500);
 				if (ok && forum) h.setText(forumNote, text.length > FORUM_MAX
 					? _('Copied %d characters. Too long for a post? Save .txt and attach it.').format(text.length)
-					: _('Copied %d characters. Paste it into a post and fill in the top two lines.').format(text.length));
+					: _('Copied %d characters. Paste it into a post and fill in the three lines at the top.').format(text.length));
 			}
 			if (navigator.clipboard && navigator.clipboard.writeText) {
 				navigator.clipboard.writeText(text).then(function() { done(true); },
