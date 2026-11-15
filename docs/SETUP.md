@@ -12,7 +12,9 @@ described in [LUCI-GUIDE.md](LUCI-GUIDE.md).
 You need:
 
 - OpenWrt **24.10 or newer** (fw4 / nftables): 24.10 uses `opkg`, 25.12
-  uses `apk`; QoS-Ex works with either.
+  uses `apk`; QoS-Ex works with either. Only OpenWrt itself is supported,
+  not vendor firmware built on it (GL.iNet's, for example) or forks such
+  as ImmortalWrt.
 - SSH access as root, for the install.
 - An internet connection on the router (the installer downloads packages).
 - LuCI, for the web app.
