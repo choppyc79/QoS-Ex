@@ -282,7 +282,10 @@ erases the settings and turns QoS-Ex off; it then opens on **Auto Setup**.
 **Remove.** **System → Maintenance → Danger zone → Uninstall QoS-Ex**
 removes the shaper, Ping Filter, the web app, the settings, the server
 history and the copies in `/root`. Installed packages stay, and flow
-offloading goes back the way QoS-Ex found it.
+offloading goes back the way QoS-Ex found it. One small menu file stays,
+so an old QoS-Ex bookmark opens Status → Overview instead of an error;
+`rm /usr/share/luci/menu.d/luci-app-qos-ex.json /tmp/luci-indexcache*`
+removes it.
 
 ---
 
