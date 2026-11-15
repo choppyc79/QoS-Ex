@@ -348,6 +348,24 @@ pingfilter() {
 		[ "$(pfk running)" = 1 ] && pass "daemon running" || fail "on, but the daemon is not running"
 		r=$(nft list chain inet qos_ex_pf enforce 2>/dev/null | sed -n '/hook forward/{n;s/^[[:space:]]*//;p;q}')
 		[ "$r" = "meta l4proto != udp return" ] && pass "enforce starts with the UDP gate (2.0.9.0)" || fail "enforce starts with: ${r:-nothing}"
+		# Ping Catch (2.0.9.8): a server whose own ping is over the catch is let
+		# in only inside the radius, or while it is played (blocked after it).
+		# The Ping Filter's own functions, in a subshell: nothing is written.
+		if [ "$(pfk block_mode)" = distance ] && [ "$(pfk ping_catch_ms)" -gt 0 ] 2>/dev/null; then
+			# shellcheck disable=SC1091,SC2034,SC2317 # the Ping Filter's code reads them
+			x=$(sed '/^case "\${1:-}" in$/,$d' "$PFB" > "$T/pf.lib"; . "$T/pf.lib"
+				RUN_LOG=""; _pf_warn_once() { :; }; _pf_warn_clear() { :; }
+				pf_load_config; PF_NOW=$(date +%s); _pf_lim; _pf_ir_fill "$PF_SERVERS_TSV"
+				while IFS= read -r row <&3; do
+					_pf_row "$row"
+					[ "$PF_C_STATE" = allowed ] && _pf_src_measured "$PF_C_SRC" && [ "$PF_C_PING" -gt "$_LIM" ] 2>/dev/null || continue
+					[ -f "$PF_RUN_DIR/.due-$PF_C_IP" ] && continue
+					_pf_in_radius "$PF_C_IP" "$PF_C_LAT" "$PF_C_LON" && continue
+					printf '%s %sms; ' "$PF_C_IP" "$PF_C_PING"
+				done 3< "$PF_SERVERS_TSV" 2>/dev/null)
+			[ -z "$x" ] && pass "Ping Catch: no server outside the radius let in with its own ping over the catch (2.0.9.8)" \
+				|| fail "Ping Catch: let in outside the radius with its own ping over the catch: $(printf '%s' "$x" | cut -c1-300)"
+		fi
 	else
 		info "Ping Filter off"
 	fi
