@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.2 · Ping Filter 2.0.9.9 · shaper 3.2.2.1**
+Current: **LuCI app 1.4.0.3 · Ping Filter 2.0.9.9 · shaper 3.2.2.1**
+
+## LuCI app 1.4.0.3
+
+- Fixed: the note after **Copy for forum** said to fill in the top two lines of the post. There are three since 1.4.0.2, which added the line type.
 
 ## LuCI app 1.4.0.2
 
