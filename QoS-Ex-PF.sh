@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.0.9.7"
+VERSION="2.0.9.8"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -676,7 +676,7 @@ _pf_geo4() {
 _pf_purge_ip_runtime() {
 	rm -f "$PF_TELE_PREFIX$1" "$PF_RUN_DIR/.ctr-$1" "$PF_RUN_DIR/.samp-$1" \
 		"$PF_RUN_DIR/stats-$1" "$PF_TELE_ACC_PREFIX$1" "$PF_RUN_DIR/.play-$1" \
-		"$PF_RUN_DIR/.ipr-$1" "$PF_RUN_DIR/.slow-$1" \
+		"$PF_RUN_DIR/.ipr-$1" \
 		"$PF_RUN_DIR/.rtry-$1" "$PF_RUN_DIR/.trttsil-$1" \
 		"$PF_RUN_DIR/.sus-$1" "$PF_RUN_DIR/.fage-$1" 2>/dev/null
 }
@@ -719,11 +719,10 @@ _pf_lim() {
 #   - no own figure (an estimate, or none): taken -- an estimate is the
 #     last resort; a handshake over the limit from one connect is not
 #     while the estimate is under it (server think time, one slow connect:
-#     a server blocked on it is never timed again), nor in ping mode while
-#     there is no estimate yet and one can still come ($8 = the server: its
-#     location is still to come, _pf_geo_nofix) and it is not being played
-#     (in session it is taken and the guard keeps it in; with Ping Catch a
-#     server not located is let in until it is); with no limit (watch
+#     a server blocked on it is never timed again), nor while there is no
+#     estimate yet and one can still come ($8 = the server: its location
+#     is still to come, _pf_geo_nofix) and it is not being played (in
+#     session it is taken and the guard keeps it in); with no limit (watch
 #     only, pure distance) only one far over the estimate (over hs_sus_x
 #     times it plus hs_sus_ms) is not -- the first reply of a flow that is
 #     not a handshake (telemetry, a late matchmaking answer) reads seconds.
@@ -769,7 +768,7 @@ _pf_fold() {
 	      || { [ "$_LIM" -eq 0 ] && [ "$m" -gt $((om * ${PF_HS_SUS_X:-2} + ${PF_HS_SUS_MS:-50})) ]; }; }; then
 		return 1
 	elif [ "$s" = real ] && [ "$n" -lt 2 ] && [ "$_LIM" -gt 0 ] && [ "$m" -gt "$_LIM" ] \
-	   && [ "${PF_BLOCK_MODE:-ping}" != distance ] && ! [ "$om" -gt 0 ] 2>/dev/null \
+	   && ! [ "$om" -gt 0 ] 2>/dev/null \
 	   && [ -n "$8" ] && ! _pf_geo_nofix "$8" && ! _pf_in_session "$8"; then
 		return 1
 	fi
@@ -3360,7 +3359,7 @@ pf_tele_clear() {
 			"$PF_RUN_DIR"/stats-* "$PF_RUN_DIR"/tele-* "$PF_TELE_ACC_PREFIX"* \
 			"$PF_RUN_DIR"/trtt-* "$PF_RUN_DIR"/.trtt-* "$PF_RUN_DIR"/.trttrun-* \
 			"$PF_RUN_DIR"/.trttsil-* "$PF_RUN_DIR"/.samprun-* "$PF_RUN_DIR"/.ipr-* \
-			"$PF_RUN_DIR"/.play-* "$PF_RUN_DIR/.sess" "$PF_RUN_DIR"/.due-* "$PF_RUN_DIR"/.slow-* \
+			"$PF_RUN_DIR"/.play-* "$PF_RUN_DIR/.sess" "$PF_RUN_DIR"/.due-* \
 			"$PF_RUN_DIR"/.rtry-* "$PF_RUN_DIR"/.sus-* "$PF_RUN_DIR"/.fage-* \
 			"$PF_RUN_DIR/.fsweep" 2>/dev/null
 	else
@@ -3448,17 +3447,12 @@ pf_tele_hist_update() {
 }
 
 # Grade by playing: at the end of a stretch of play on an allowed, unpinned
-# server, the median of its in-play readings ($PF_RUN_DIR/.ipr-<ip>):
-#   - not carried by its group, and no handshake at or under the limit: it
-#     becomes the server's figure (so the figure can rise) and the server is
-#     graded again, blocked after the game if over;
-#   - carried by its group: over the limit counts a slow session
-#     (.slow-<ip>, tmpfs: gone at boot, New game, Clear cache, forget); two
-#     make it confirmed over (_pf_classify), blocked after the game. One slow
-#     session is not enough.
+# server with no handshake at or under the limit, the median of its in-play
+# readings ($PF_RUN_DIR/.ipr-<ip>) becomes its figure (so the figure can
+# rise) and the server is graded again, blocked after the game if over.
 # Fewer readings than half a session's worth (a lobby burst) grade nothing.
 _pf_play_grade() {
-	local ip="$1" f="$PF_RUN_DIR/.ipr-$1" m ex s=0 _LIM
+	local ip="$1" f="$PF_RUN_DIR/.ipr-$1" m ex _LIM
 	[ -f "$f" ] || return 0
 	m=$(awk -v min="$(( ${PF_SESSION_MIN:-60} / (${PF_RTT_INTERVAL:-2} * 2) ))" "$PF_MED_AWK"'{ v[++n] = $1 + 0 } END { if (n && n >= min) print med(v, n) }' "$f" 2>/dev/null)
 	rm -f "$f" 2>/dev/null
@@ -3476,19 +3470,7 @@ _pf_play_grade() {
 		   || { [ "$_LIM" -eq 0 ] && [ "${PF_C_LOSS:-0}" -ge 2 ] 2>/dev/null; }; } && return 0
 	# Confirmed over (kept allowed while played): its handshake stands.
 	[ "$PF_C_SRC" = real ] && [ "${PF_C_LOSS:-0}" -ge 2 ] 2>/dev/null && return 0
-	_pf_classify "$PF_C_PING" "$PF_C_LAT" "$PF_C_LON" "$PF_C_SRC" "$ip" "$PF_C_CO" "$PF_C_LOSS"
-	if [ "$_CLG" = 1 ]; then
-		[ "$m" -gt "$_LIM" ] || return 0
-		[ -f "$PF_RUN_DIR/.slow-$ip" ] && read -r s < "$PF_RUN_DIR/.slow-$ip" 2>/dev/null
-		case "$s" in ''|*[!0-9]*) s=0 ;; esac
-		s=$((s + 1))
-		echo "$s" > "$PF_RUN_DIR/.slow-$ip" 2>/dev/null
-		pf_note "INFO" "ping filter: $ip played at ${m}ms, over the limit while its group carries it (slow session $s)"
-		[ "$s" -ge 2 ] || return 0
-		_pf_verdict "$ip" "$PF_C_PING" "$PF_C_SRC" 1
-	else
-		_pf_verdict "$ip" "$m" icmp 1
-	fi
+	_pf_verdict "$ip" "$m" icmp 1
 	pf_note "INFO" "ping filter: $ip graded on its play (${m}ms) -> $_V$([ -f "$PF_RUN_DIR/.due-$ip" ] && echo ", blocked after the game")"
 }
 
@@ -3909,7 +3891,7 @@ _pf_ir_fill() {
 # into _CL, in this shell (no fork per server in ping mode). rtt = the row's
 # figure: its own reading (src icmp|real), else its estimate, else -1 (none);
 # connects = its handshake's (servers.tsv col 12). Confirmed over = a
-# handshake over the limit on 2+ connects. _CLG = 1: its group allowed it.
+# handshake over the limit on 2+ connects.
 #   - every mode: a known country not on allow_country is blocked;
 #   - ping: limit 0 (watch only) allows; confirmed over blocks; a figure at
 #     or under the limit allows, over it blocks; no figure: allowed until
@@ -3920,14 +3902,15 @@ _pf_ir_fill() {
 #     km -> ms model, _pf_geo_est);
 #   - distance + Ping Catch (the radius lets servers in, the catch adds
 #     those outside it that measure at or under it): inside allowed; own
-#     reading at or under the catch allowed; confirmed over blocked, as is
-#     one over the catch on 2 stretches of play while its group carried it
-#     (.slow-<ip>); then its group (_pf_area_verdict) allows or blocks; not
-#     located with a lookup still to come: allowed until it is; then its
-#     figure decides; no figure: allowed until graded.
+#     reading at or under the catch allowed; own reading over it blocked,
+#     also while its location is still to come (located inside later, it is
+#     let in); with no reading of its own, its group (_pf_area_verdict)
+#     allows or blocks; not located with a lookup still to come: allowed
+#     until it is; then its estimate decides; no figure: allowed until
+#     graded.
 # "Allowed until graded" with no figure waits under the hold (_pf_put).
 _pf_classify() {
-	_CL=""; _CLG=0
+	_CL=""
 	local rtt="$1" lat="$2" lon="$3" src="$4" ip="$5" n="${7:-0}" own=0 cov=0 ir s=""
 	case "$rtt" in (''|*[!0-9-]*) rtt="-1" ;; esac
 	case "$n" in (''|*[!0-9]*) n=0 ;; esac
@@ -3957,11 +3940,13 @@ _pf_classify() {
 			fi
 			_CL=blocked; return
 		fi
-		[ -n "$ip" ] && [ -f "$PF_RUN_DIR/.slow-$ip" ] && read -r s < "$PF_RUN_DIR/.slow-$ip" 2>/dev/null
-		{ [ "$cov" = 1 ] || [ "${s:-0}" -ge 2 ] 2>/dev/null; } && { _CL=blocked; return; }
+		# Ping Catch, outside the radius or not located yet. Its own reading
+		# over the catch keeps it out; once located inside, the radius test
+		# lets it in. The group speaks only for a server with no reading of
+		# its own.
+		[ "$own" = 1 ] && { _CL=blocked; return; }
 		if [ -n "$ip" ]; then
 			_pf_area_verdict "$ip" "$lat" "$lon"
-			[ "$_AV" = allowed ] && _CLG=1
 			[ -n "$_AV" ] && { _CL=$_AV; return; }
 		fi
 		[ "$ir" = 2 ] && [ -n "$ip" ] && ! _pf_geo_gone "$ip" && { _CL=allowed; return; }
@@ -6791,7 +6776,8 @@ How a new server is graded (ping mode)
   Every reading is an upper bound: a server takes a lower one, never a
   higher one (Re-check cache and its play may raise it). An estimate is the
   last resort: a handshake replaces it, except one over the limit from one
-  connect while the estimate is under it (with no limit: one over twice the
+  connect while the estimate is under it, or while there is no estimate yet
+  and a location can still come (with no limit: one over twice the
   estimate + 50 ms); on two connects it lands, over the limit = confirmed
   over. A reading passes at <= limit + ping_var_pct percent.
   threshold_ms 0 = watch only: pings shown, nothing blocked but the
@@ -6803,13 +6789,14 @@ Distance mode
   held to the radius in ms (this link's distance model).
   ping_catch_ms > 0: the radius lets servers in, the catch adds those
   outside it at or under ping_catch_ms. A server inside the radius is
-  allowed whatever its ping (block a bad one by hand). Outside it: its own
-  reading at or under the catch allows it; confirmed over blocks it; else
-  its group ($PF_AREA_KM km, or its /24): more under the catch than
-  confirmed over, with one in its /24 or auto_pin in the area, allows it
-  (an echo over the catch counts on neither side); auto_pin confirmed over
-  and none under blocks it. Not located yet: allowed until it is. New
-  servers wait as in ping mode.
+  allowed whatever its ping (block a bad one by hand). Outside it, or not
+  located yet: its own reading at or under the catch allows it, over it
+  blocks it (once located inside the radius, it is allowed). A server with
+  no reading of its own goes with its group ($PF_AREA_KM km, or its /24):
+  more under the catch than confirmed over, with one in its /24 or
+  auto_pin in the area, allows it (an echo over the catch counts on
+  neither side); auto_pin confirmed over and none under blocks it. Not
+  located yet: allowed until it is. New servers wait as in ping mode.
 
 Either mode
   allow_country: when set, a server in any other country is blocked, and
@@ -6825,9 +6812,8 @@ Either mode
   ignore_ports never count. A change from the live controls (mode, limit,
   radius, catch, profile, Re-check cache) lands at once. With telemetry, a
   server is graded on its play: at the end of a stretch with enough
-  in-play readings its median becomes its figure, or, carried by its
-  group, two slow stretches block it. A stop or restart mid-match grades
-  nothing.
+  in-play readings its median becomes its figure. A stop or restart
+  mid-match grades nothing.
 
 Config: /etc/config/qos-ex -> config pingfilter 'pingfilter'
 History and caches: $PF_PERSIST_DIR
