@@ -21,7 +21,7 @@
 # Software Foundation, either version 3 of the License, or (at your option)
 # any later version.  See <https://www.gnu.org/licenses/> for details.
 
-VERSION="3.2.2.0"
+VERSION="3.2.2.1"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="QoS-Ex"
@@ -2094,7 +2094,7 @@ _pf_fmt_ipsets() {
 # rebuild is not loaded: a load resets flow flags, sticky pairs and counters,
 # and the procd trigger fires on any commit.
 nft_load_or_log() {
-	local _nft="$1" _label="$2" _err _tbl="${1##*/}" _was
+	local _nft="$1" _label="$2" _err _tbl="${1##*/}"
 	_tbl="${_tbl%.nft}"
 	if [ "${_NFT_KEEP:-0}" = 1 ] && cmp -s "$_nft.new" "$_nft" 2>/dev/null && \
 	   nft list tables inet 2>/dev/null | grep -qx "table inet $_tbl"; then
@@ -2104,21 +2104,17 @@ nft_load_or_log() {
 	fi
 	# Data, never executed; holds LAN topology and device addresses: 0600.
 	chmod 600 "$_nft.new" 2>/dev/null
-	# Dry run first. The file replaces the table atomically (table / delete /
-	# table), so a bad ruleset is a logged no-op, never an outage.
-	if _err=$(nft -c -f "$_nft.new" 2>&1); then
-		if _err=$(nft -f "$_nft.new" 2>&1); then
-			mv -f "$_nft.new" "$_nft" || err "nft $_label: could not keep $_nft"
-			rm -f "$NFT_ERR"
-			msg "NFT $_label loaded"
-			return 0
-		fi
-		_was="failed"
-	else
-		_was="FAILED VALIDATION"
+	# One load, no dry run first: the file replaces the table in one
+	# transaction (table / delete / table), so a bad ruleset is a logged
+	# no-op, never an outage, and a check pass would only parse it twice.
+	if _err=$(nft -f "$_nft.new" 2>&1); then
+		mv -f "$_nft.new" "$_nft" || err "nft $_label: could not keep $_nft"
+		rm -f "$NFT_ERR"
+		msg "NFT $_label loaded"
+		return 0
 	fi
 	{
-		echo "=== NFT $_label $_was at $(date) ==="
+		echo "=== NFT $_label failed at $(date) ==="
 		echo "$_err"
 		echo ""
 		echo "=== Generated ruleset ($_nft.new) ==="
@@ -2128,11 +2124,11 @@ nft_load_or_log() {
 	chmod 600 "$NFT_ERR" 2>/dev/null
 	rm -f "$_nft.new"
 	if nft list tables inet 2>/dev/null | grep -qx "table inet $_tbl"; then
-		err "nft $_label $_was - ruleset NOT applied, the previous $_label rules are still loaded (see $NFT_ERR)"
+		err "nft $_label failed - ruleset NOT applied, the previous $_label rules are still loaded (see $NFT_ERR)"
 	else
-		err "nft $_label $_was - ruleset NOT applied, no $_label rules are loaded (see $NFT_ERR)"
+		err "nft $_label failed - ruleset NOT applied, no $_label rules are loaded (see $NFT_ERR)"
 	fi
-	log "nft $_label $_was: $_err"
+	log "nft $_label failed: $_err"
 	return 1
 }
 
@@ -4917,6 +4913,11 @@ qos_ex_debug() {
 	[ -x "$PF_BIN" ] && "$PF_BIN" status 2>/dev/null || echo "(pingfilter not installed)"
 	echo "--- $RUN_LOG (last 40) ---"
 	tail -40 "$RUN_LOG" 2>/dev/null || echo "(empty)"
+	# The ifup hook and procd log only to the system log: whether a line
+	# drop restarted shaping shows here.
+	echo "--- system log (QoS-Ex lines, last 20) ---"
+	_t=$(logread -e QoS-Ex 2>/dev/null | tail -n 20)
+	[ -n "$_t" ] && echo "$_t" || echo "(none)"
 	echo "--- nft errors ---"
 	tail -10 "$NFT_ERR" 2>/dev/null
 	tail -10 "$PF_NFT_ERR" 2>/dev/null
