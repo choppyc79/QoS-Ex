@@ -721,6 +721,8 @@ GitHub: LuCI app, Ping Filter, shaper.
   or update is written there with its reason, and the card links to it. Only
   one update runs at a time: a page opened during an update, from LuCI or
   over SSH, shows it running.
+- **Changelog →** opens the changelog on GitHub, for the branch updates
+  come from.
 - **Advanced → Update branch** — `main` (releases, the default) or `dev`
   (testing builds). When the branch picked is not the one installed, **Update
   now** becomes **Switch to main** or **Switch to dev**, and installs that
@@ -736,7 +738,7 @@ for forum** or **Save .txt**.
   every MAC address. The addresses of the servers your devices talk to stay
   in.
 - To report a problem on a forum, press **Copy for forum**, paste it into a
-  new post and fill in the two lines at the top. For GitHub, copy the
+  new post and fill in the three lines at the top. For GitHub, copy the
   report, follow **Report an issue** and paste it into the form's Debug
   report box.
 
