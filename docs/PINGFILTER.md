@@ -161,14 +161,18 @@ Ping Filter log on **System → Logs**.
    it waits from its first packet until located. Watch only holds nothing.
 2. **Its ping.** A short ICMP ping burst (the median) and the game's first
    exchange. A server that ignores ping gets an estimate from measured
-   servers in its /24, then its area (150 km), then its distance. An
-   estimate is the last resort: the game's first exchange replaces it.
+   servers first: the lowest in its /24, then the median of those within
+   150 km (ICMP and the game's exchange alike); then earlier readings in its
+   /24, then its distance. An estimate is the last resort: the game's first
+   exchange replaces it.
 3. **A reading only lowers the figure.** One slow ping does not block a
    server that measured under the limit. **Re-check cache** and play can
    raise it. The game's first exchange over the limit, on a server whose
    estimate is under it or that has no estimate yet while its location is
    still coming, counts only on two separate connects: a server blocked on
-   one slow reply would never be timed again. With no limit
+   one slow reply would never be timed again. With Ping Catch that holds
+   for every server without a ping of its own: until a second connect
+   confirms it, the server stays out of the game. With no limit
    (Watch only, or distance without Ping Catch), one more than twice the
    estimate plus 50 ms waits for a second connect too: a first reply that
    slow is the server's own delay, not the distance. A first ping more
@@ -177,14 +181,20 @@ Ping Filter log on **System → Logs**.
    ping figure older than three days is measured again while you are not
    playing, so a route that got slower shows.
 4. **Ping Catch** (distance mode): inside the radius every server is let
-   in. Outside it, a ping at or under the catch lets it in and a ping over
-   it keeps it out, also while its location is still coming (once located
-   inside the radius, it is let in). A server with no ping of its own goes
-   with the measured servers in its /24 and area.
+   in. Outside it, only the server's own ping lets it in: at or under the
+   catch it is let in, over it kept out, also while its location is still
+   coming (once located inside the radius, it is let in). A server with no
+   ping of its own goes with the measured servers in its /24 and area; when
+   they do not decide, an estimate over the catch keeps it out, and
+   otherwise it waits out of the game (**held** on the Servers list) until
+   its own ping is graded. With a country list it is let in on its
+   estimate: every new server is held there, so nothing could time it.
 5. **While you play on it**, Ping Filter's own re-grades never cut the
-   server: a block waits until 30 s after its last game packet. The
-   Dashboard and Map controls, **Always block**, **New game** and **Clear
-   cache** act at once.
+   server: a block waits until 30 s after its last game packet. With Ping
+   Catch that covers only a server the game was let through to: a held one
+   is not being played, and a new one is judged on its own ping even
+   mid-match. The Dashboard and Map controls, **Always block**, **New game**
+   and **Clear cache** act at once.
 6. **Graded by playing**: when you stop playing on a server, the ping
    measured during play becomes its figure and it is graded again. A
    figure from the game's first exchange stays when it is at or under the

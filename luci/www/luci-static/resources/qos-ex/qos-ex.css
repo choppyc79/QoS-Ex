@@ -910,11 +910,13 @@ details.qos-ex-raw > summary {
 .label.pf-pill.off,
 .label.pf-badge.blocked, .label.pf-badge.blacklist,
 .label.pf-score.poor          { --pf-c: var(--error-color-high, #c43c35); }
-.label.pf-pill.matchmaking,
+.label.pf-pill.matchmaking, .label.pf-badge.held,
 .label.pf-score.ok            { --pf-c: var(--warn-color-high, #c09000); }
 :root[data-darkmode="false"] .label.pf-pill.matchmaking,
+:root[data-darkmode="false"] .label.pf-badge.held,
 :root[data-darkmode="false"] .label.pf-score.ok,
 :root:not([data-darkmode]) .label.pf-pill.matchmaking,
+:root:not([data-darkmode]) .label.pf-badge.held,
 :root:not([data-darkmode]) .label.pf-score.ok { --pf-c: #b07d00; }
 .label.pf2-best, .label.pf-fam6 { --pf-c: var(--primary-color-high, #0069d6); }
 /* Score: fixed width so a column of them lines up. */
