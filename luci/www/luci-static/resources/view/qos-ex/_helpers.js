@@ -487,7 +487,7 @@ function ctRow(line) {
 }
 
 var PF_STATE_TXT = { allowed: _('allowed'), blocked: _('blocked'), whitelist: _('always allowed'),
-	blacklist: _('always blocked'), cached: _('cached') };
+	blacklist: _('always blocked'), cached: _('cached'), held: _('held') };
 
 return baseclass.extend({
 	callStatus:    cacheTap('status', rpc.declare({ object: 'qos-ex', method: 'status' })),
@@ -1927,6 +1927,7 @@ return baseclass.extend({
 		x = [ s.state ];
 		if (s.connected === true || s.connected === 'true') x.push(s.ip === o.liveIp ? _('playing now') : _('connected now'));
 		if (s.state === 'whitelist' || s.state === 'blacklist') x.push(_('pinned manually'));
+		else if (s.state === 'held') x.push(_('out of the game until its own ping is graded'));
 		else if ((s.expiry_remaining_sec | 0) > 0)
 			x.push(_('expires in') + ' ' + Math.max(1, Math.round(s.expiry_remaining_sec / 60)) + ' m');
 		add(_('Verdict'), x.join(' \u00b7 '));
@@ -2258,16 +2259,17 @@ return baseclass.extend({
 			var conn = (r.connected === true || r.connected === 'true');
 			var playing = (r.ip === o.playIp), home = o.home;
 			var badge = E('span', { 'class': 'label pf-badge ' + r.state,
-				'title': r.state === 'cached' ? _('Known from the cache but not enforced now') : '' }, [ PF_STATE_TXT[r.state] || r.state ]);
+				'title': r.state === 'cached' ? _('Known from the cache but not enforced now')
+					: r.state === 'held' ? _('Out of the game until its own ping is graded') : '' }, [ PF_STATE_TXT[r.state] || r.state ]);
 			// Distance from home, km (-1 = home or the server not located).
 			var km = (home && parseFloat(r.lat) && parseFloat(r.lon))
 				? self.haversineKm(home[0], home[1], parseFloat(r.lat), parseFloat(r.lon)) : -1;
 			// Ping Catch tag: an allowed server outside the radius that the
-			// catch let in (<= catch + catch*ping_var_pct/100).
-			var cLim = (o.pingCatch | 0);
+			// catch let in on its own ping (<= catch + catch*ping_var_pct/100).
+			var cLim = (o.pingCatch | 0), psrc = r.ping_src || r.ping_source;
 			cLim += Math.floor(cLim * (o.pingVarPct | 0) / 100);
 			var caught = o.blockMode === 'distance' && (o.pingCatch | 0) > 0 && r.state === 'allowed' &&
-				r.ping > 0 && r.ping <= cLim &&
+				(psrc === 'icmp' || psrc === 'real') && r.ping > 0 && r.ping <= cLim &&
 				km >= 0 && km > (parseInt(o.homeRadiusKm, 10) || 1000);
 			var tags = [];
 			if (caught) tags.push(E('span', { 'class': 'label pf-badge catch', 'title': _('Outside your radius, let in by the ping catch') }, _('catch')));
