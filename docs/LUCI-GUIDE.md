@@ -378,6 +378,7 @@ under the map, and listed on Servers only.
 | Green | Allowed |
 | Red | Blocked |
 | Grey | Known from earlier, no verdict in force now |
+| Amber | Held: out of the game until its own ping is graded (Ping Catch) |
 | White ring | Always allowed |
 | Black ring | Always blocked |
 | Large, pulsing | The server you are playing on now |
@@ -414,6 +415,9 @@ above 800, the table shows the first 800 and the servers in use.
 
 On each row:
 
+- Its state. **held**: with Ping Catch, a server outside your radius with no
+  ping of its own yet, kept out of the game until its own ping is graded.
+  **catch**: one Ping Catch let in on its own ping.
 - **Allow** or **Block** pins the server either way. Press the lit one again
   to unpin it, so it is judged by ping or distance again.
 - **×** forgets the server: everything except its location.
