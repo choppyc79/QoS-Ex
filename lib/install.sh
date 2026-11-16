@@ -1374,27 +1374,40 @@ _as_probe() {
 		_isnum "$AS_FLASH_MB" || AS_FLASH_MB=0
 		_isnum "$AS_FLASH_FREE_MB" || AS_FLASH_FREE_MB=0
 	fi
-	# WAN: the device the line is on (the default route), else the one set;
-	# a fresh config may name eth0 when the line was not up at install. Then
-	# the netifd WAN's protocol and its L2 device (a PPPoE device has none
-	# below it in sysfs).
+	# WAN: the one set while a default route uses it (with two lines, Setup's
+	# choice stays), else the line in use (_wan_live), else the one set: a
+	# fresh config may name eth0 when the line was not up at install. Then
+	# that interface's protocol and its L2 device (a PPPoE device has none
+	# below it in sysfs), and AS_WAN_ALL: every default-route line's device.
 	AS_WAN_CFG=$(uci -q get "$UCI_CFG.settings.wan")
 	AS_WAN_LIVE=$(_wan_live)
 	case "$AS_WAN_LIVE" in *[!A-Za-z0-9._-]*) AS_WAN_LIVE="" ;; esac
 	AS_WAN=${AS_WAN_LIVE:-$AS_WAN_CFG}
-	AS_PROTO=""; _dev=""
+	AS_WAN_ALL=""; AS_PROTO=""; _dev=""
 	if [ -f /lib/functions/network.sh ] && [ -f /usr/share/libubox/jshn.sh ]; then
 		# A subshell: network.sh sources jshn.sh unguarded (see _wan_live).
 		_v=$(
 			. /lib/functions/network.sh 2>/dev/null
-			command -v network_find_wan >/dev/null 2>&1 || exit 0
-			network_find_wan _w 2>/dev/null
-			[ -n "$_w" ] || exit 0
-			network_get_physdev _d "$_w" 2>/dev/null
-			echo "$(uci -q get "network.$_w.proto") $_d"
+			command -v network_get_device >/dev/null 2>&1 || exit 0
+			_l=""; _wan_ifs _l
+			_all="" _wi="" _wc=""
+			for _i in $_l; do
+				_d=""; network_get_device _d "$_i" 2>/dev/null
+				case "$_d" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+				_all="${_all:+$_all }$_d"
+				[ "$_d" = "$AS_WAN_CFG" ] && [ -z "$_wc" ] && _wc=$_i
+				[ "$_d" = "$AS_WAN" ] && [ -z "$_wi" ] && _wi=$_i
+			done
+			_u=$AS_WAN; [ -n "$_wc" ] && { _u=$AS_WAN_CFG; _wi=$_wc; }
+			_d=""; _p=""
+			[ -n "$_wi" ] && { network_get_physdev _d "$_wi" 2>/dev/null; _p=$(uci -q get "network.$_wi.proto"); }
+			echo "$_all|$_u|$_p|$_d"
 		)
-		AS_PROTO=${_v%% *}; _dev=${_v#* }
-		[ "$_dev" = "$_v" ] && _dev=""
+		case "$_v" in *"|"*"|"*"|"*)
+			AS_WAN_ALL=${_v%%|*}; _v=${_v#*|}
+			AS_WAN=${_v%%|*}; _v=${_v#*|}
+			AS_PROTO=${_v%%|*}; _dev=${_v#*|} ;;
+		esac
 	fi
 	# LAN: the lan interface's device, and how many devices carry an up
 	# interface besides the WAN's (download_on lan shapes one device: with
@@ -1796,13 +1809,14 @@ _as_note() { printf 'note|%s\n' "$1"; }
 _as_keep() { printf 'keep|%s|%s|%s\n' "$1" "$(uci -q get "$UCI_CFG.$1")" "$2"; }
 
 _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
-	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel _mx=0 _cm _st=0
+	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel _mx=0 _cm _st=0 _ln _ls
 	# Line rates are the line's speed: the shaper takes Headroom off them.
 	_hr=$(uci -q get "$UCI_CFG.settings.bw_headroom")
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
-	# The WAN set is not the device the line is on.
-	[ -n "$AS_WAN_LIVE" ] && [ "$AS_WAN_LIVE" != "$AS_WAN_CFG" ] &&
-		_as_sug settings.wan "$AS_WAN_LIVE" "the line (default route) is on $AS_WAN_LIVE"
+	# The WAN set carries no default route: the line in use. (One that
+	# carries one stays: _as_probe.)
+	[ -n "$AS_WAN" ] && [ "$AS_WAN" != "$AS_WAN_CFG" ] &&
+		_as_sug settings.wan "$AS_WAN" "the line (default route) is on $AS_WAN"
 	# Line rates: typed, else a fresh speed test, else the DSL sync rate.
 	if _isnum "${1:-}" && _isnum "${2:-}"; then
 		_dn=$1; _up=$2; _src="the speeds given"
@@ -1844,6 +1858,15 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		done
 	else
 		_as_note "No line speed yet: run the speed test, or give the line's download and upload speeds."
+	fi
+	# More than one line with a default route (failover, mwan3): QoS-Ex
+	# shapes one, and the speed test's streams may take another.
+	_ln=0; _ls=""
+	for _v in $AS_WAN_ALL; do _ln=$((_ln + 1)); _ls="${_ls:+$_ls, }$_v"; done
+	if [ "$_ln" -gt 1 ]; then
+		_v=""
+		[ "$_src" = "the speed test" ] && _v=" The speed test may have run over more than one line: if its speeds look low, type them."
+		_as_note "$_ln lines have a default route ($_ls). QoS-Ex shapes $AS_WAN only: send the gaming devices out through it (an mwan3 rule or pbr).$_v"
 	fi
 	# Queue: the rating's (queue_<tier>: HTB on a low-spec router, HFSC on a
 	# mid-range one, CAKE on a high-end one), always shown, then one step
