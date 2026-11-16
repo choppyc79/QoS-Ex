@@ -161,8 +161,10 @@ Ping Filter log on **System → Logs**.
    it waits from its first packet until located. Watch only holds nothing.
 2. **Its ping.** A short ICMP ping burst (the median) and the game's first
    exchange. A server that ignores ping gets an estimate from measured
-   servers in its /24, then its area (150 km), then its distance. An
-   estimate is the last resort: the game's first exchange replaces it.
+   servers first: the lowest in its /24, then the median of those within
+   150 km (ICMP and the game's exchange alike); then earlier readings in its
+   /24, then its distance. An estimate is the last resort: the game's first
+   exchange replaces it.
 3. **A reading only lowers the figure.** One slow ping does not block a
    server that measured under the limit. **Re-check cache** and play can
    raise it. The game's first exchange over the limit, on a server whose
