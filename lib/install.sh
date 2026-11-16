@@ -1240,6 +1240,9 @@ install_fw4_include() {
 AS_RUN="/var/run/qos-ex-autosetup"         # speed test progress and result
 AS_SUGG="/var/run/qos-ex-autosetup.sugg"   # the last suggestions, for apply
 AS_LOCK="/var/run/qos-ex-autosetup.lock"
+# The speed test's routing (_as_bind): its rules' priority and its table,
+# before mwan3's rules (1001 up), pbr's and the main table.
+AS_RT=900
 AS_BAK="/etc/qos-ex/autosetup.bak"         # the config before the last apply
 AS_STEER_BAK="/etc/qos-ex/autosetup.steering"
 # The only keys apply writes: rpcd passes the user's choice through.
@@ -1566,7 +1569,7 @@ _as_save() {
 		"down_kbps=$AS_DN" "up_kbps=$AS_UP" "ping_idle=$AS_P0" "ping_down=$AS_PD" "ping_up=$AS_PU" \
 		"cpu_down=$AS_CD" "sirq_down=$AS_SD" "cpu_up=$AS_CU" "sirq_up=$AS_SU" \
 		"limit_down=$AS_LD" "limit_up=$AS_LU" "streams=$AS_STREAMS" "secs=$AS_SECS" \
-		"wan=$AS_WAN" "msg=$AS_MSG" "at=$(($(_as_up100) / 100))" > "$AS_RUN.tmp" 2>/dev/null &&
+		"wan=$AS_WAN" "bound=${AS_BOUND:-0}" "msg=$AS_MSG" "at=$(($(_as_up100) / 100))" > "$AS_RUN.tmp" 2>/dev/null &&
 		mv -f "$AS_RUN.tmp" "$AS_RUN"
 }
 
@@ -1591,16 +1594,20 @@ _as_stream() {   # $1 = stop file, $2 = PID file, $3.. = uclient-fetch arguments
 }
 
 # Stop the stream loops ($@) and the fetch each one is in. A PID file is only
-# acted on while it still names uclient-fetch (PIDs are reused).
+# acted on while it still names uclient-fetch (PIDs are reused). From the
+# third try KILL: a fetch still connecting to a server that never answers
+# ignores TERM (uloop only notes it) until its connect timeout, and kept
+# the speed test's lock.
 _as_kill() {
-	local _f _p _c _live _try=0
+	local _f _p _c _live _try=0 _sig=TERM
 	[ -n "$AS_TMP" ] && : > "$AS_TMP/stop"
 	while [ "$_try" -lt 5 ]; do
+		[ "$_try" -ge 2 ] && _sig=KILL
 		for _f in "$AS_TMP"/pid.*; do
 			[ -f "$_f" ] || continue
 			_p=""; read -r _p < "$_f"
 			_c=""; read -r _c 2>/dev/null < "/proc/$_p/comm"
-			[ "$_c" = uclient-fetch ] && kill "$_p" 2>/dev/null
+			[ "$_c" = uclient-fetch ] && kill -"$_sig" "$_p" 2>/dev/null
 		done
 		_live=""
 		for _p in "$@"; do kill -0 "$_p" 2>/dev/null && _live=1; done
@@ -1620,8 +1627,8 @@ _as_kill() {
 # last failed fetch's reason, empty when none failed).
 _as_dir() {
 	local _ctr _i=0 _n=0 _bs _b0="" _now _prev _u0 _u1 _cap _pp="" _c
-	# IPv4 only: AS_WAN is the IPv4 default route's device, and IPv6 can run
-	# on another. 90 MB a request (Cloudflare refuses 100 MB): fewer
+	# IPv4 only: _as_bind routes the test out through AS_WAN, and IPv6 can
+	# run on another line. 90 MB a request (Cloudflare refuses 100 MB): fewer
 	# requests, and Cloudflare limits how many one address may make.
 	if [ "$1" = down ]; then
 		_ctr="/sys/class/net/$AS_WAN/statistics/rx_bytes"
@@ -1684,13 +1691,60 @@ _as_limit() {   # $1 = kbps, $2 = busiest core %
 	else echo line; fi
 }
 
-# Run on exit, error or Ctrl-C: streams stopped, shaping back as it was.
+# The IPv4 addresses of host $1, one a line: itself when it is one, else the
+# resolver's (BusyBox nslookup prints "Address: a.b.c.d"; the line naming
+# the DNS server carries its port).
+_as_ip4() {
+	case "$1" in
+		'') ;;
+		*[!0-9.]*) nslookup "$1" 2>/dev/null | awk '$1 ~ /^Address/ && $NF ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && $NF !~ /^127\./ { print $NF }' | sort -u ;;
+		*) echo "$1" ;;
+	esac
+}
+
+# The test out through AS_WAN, whatever line the router's own traffic takes
+# (failover by metric, load balancing, pbr): the router's own packets (iif
+# lo: LAN traffic keeps its line) to the test server ($1) and the ping host
+# ($2) follow rules before mwan3's and pbr's to table AS_RT, which holds one
+# default route over the WAN. A rule on the address alone: one with ipproto
+# or a port stops matching once mwan3 marks the packet in output and the
+# kernel routes it again (measured), and the packet left by the other line
+# with the WAN's address. False, with nothing left, when the WAN has no
+# default route, the server's name does not resolve, another tool's rule
+# uses the table, or a rule is refused.
+_as_bind() {
+	local _l _gw _a _s
+	_as_unbind
+	ip -4 rule show 2>/dev/null | grep -qw "lookup $AS_RT" && return 1
+	_s=$(_as_ip4 "$1")
+	[ -n "$_s" ] || return 1
+	_l=$(ip -4 route show table all default dev "$AS_WAN" 2>/dev/null | head -n 1)
+	[ -n "$_l" ] || return 1
+	_gw=$(printf '%s\n' "$_l" | awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')
+	ip -4 route add default ${_gw:+via "$_gw"} dev "$AS_WAN" table "$AS_RT" 2>/dev/null || return 1
+	for _a in $({ printf '%s\n' "$_s"; _as_ip4 "$2"; } | sort -u); do
+		ip -4 rule add pref "$AS_RT" to "$_a" iif lo lookup "$AS_RT" 2>/dev/null || { _as_unbind; return 1; }
+	done
+}
+
+# _as_bind's rules out, then its table once no rule uses it (also what a
+# test stopped hard left behind).
+_as_unbind() {
+	local _n=0
+	while [ "$_n" -lt 64 ] && ip -4 rule del pref "$AS_RT" lookup "$AS_RT" 2>/dev/null; do _n=$((_n + 1)); done
+	ip -4 rule show 2>/dev/null | grep -qw "lookup $AS_RT" || ip -4 route flush table "$AS_RT" >/dev/null 2>&1
+	AS_BOUND=""
+}
+
+# Run on exit, error or Ctrl-C: streams stopped, routing and shaping back as
+# they were.
 _as_end() {
 	trap - EXIT INT TERM
 	# shellcheck disable=SC2086  # a PID list
 	[ -n "$AS_PIDS" ] && _as_kill $AS_PIDS
 	[ -n "$AS_TMP" ] && rm -rf "$AS_TMP"
 	AS_TMP=""
+	_as_unbind
 	case "$AS_PHASE" in
 		done|error) ;;
 		*) AS_PHASE=error; AS_MSG="${AS_MSG:-stopped before the end}"; _as_save ;;
@@ -1703,7 +1757,7 @@ _as_end() {
 }
 
 autosetup_speedtest() {
-	local _kb _w
+	local _kb _w _h
 	command -v uclient-fetch >/dev/null 2>&1 || { err "uclient-fetch not found"; return 1; }
 	if command -v flock >/dev/null 2>&1; then
 		exec 6>> "$AS_LOCK"
@@ -1732,7 +1786,7 @@ autosetup_speedtest() {
 	_kb=$((AS_MEMFREE_KB / (4 * (AS_STREAMS + 1))))
 	[ "$_kb" -lt 256 ] && _kb=256
 	[ "$_kb" -gt 16384 ] && _kb=16384
-	AS_PHASE=start; AS_PROG=0; AS_NOW=0; AS_MSG=""; AS_PIDS=""
+	AS_PHASE=start; AS_PROG=0; AS_NOW=0; AS_MSG=""; AS_PIDS=""; AS_BOUND=""
 	AS_DN=""; AS_UP=""; AS_P0=""; AS_PD=""; AS_PU=""
 	AS_CD=""; AS_SD=""; AS_CU=""; AS_SU=""; AS_LD=""; AS_LU=""
 	_AS_WAS=0
@@ -1746,6 +1800,10 @@ autosetup_speedtest() {
 		AS_PHASE=error; AS_MSG="no room in /tmp for the upload file"; _as_save
 		_as_end; err "speed test: $AS_MSG"; return 1
 	fi
+	# With two lines the router's own traffic may leave by the other one: the
+	# test server (the URL's host) and the ping host go through the WAN.
+	_h=${AS_URL#*://}; _h=${_h%%/*}; _h=${_h%:*}
+	_as_bind "$_h" "$AS_PING_HOST" && AS_BOUND=1
 	if [ -f /var/run/qos-ex-started ]; then
 		msg "speed test: shaping stopped for the test, started again after"
 		_AS_WAS=1
@@ -1753,7 +1811,7 @@ autosetup_speedtest() {
 	fi
 	ping -q -c 5 -W 2 "$AS_PING_HOST" > "$AS_TMP/ping" 2>&1
 	AS_P0=$(_as_ping "$AS_TMP/ping")
-	msg "speed test: download, $AS_STREAMS streams, ${AS_SECS} s ($AS_URL)"
+	msg "speed test: download${AS_BOUND:+ through $AS_WAN}, $AS_STREAMS streams, ${AS_SECS} s ($AS_URL)"
 	_as_dir down
 	AS_DN=$AS_KBPS; AS_CD=$AS_CPU; AS_SD=$AS_SIRQ; AS_PD=$AS_PING; AS_FD=$AS_FAIL
 	AS_LD=$(_as_limit "$AS_DN" "$AS_CD")
@@ -1769,7 +1827,7 @@ autosetup_speedtest() {
 		_w=""
 		[ "$AS_DN" -lt 100 ] && _w="download${AS_FD:+ ($AS_FD)}"
 		[ "$AS_UP" -lt 100 ] && _w="${_w:+$_w, }upload${AS_FU:+ ($AS_FU)}"
-		AS_MSG="almost no test traffic crossed $AS_WAN: $_w (down $(_as_mbit "$AS_DN"), up $(_as_mbit "$AS_UP") Mbit) - check that $AS_URL can be reached"
+		AS_MSG="almost no test traffic crossed $AS_WAN: $_w (down $(_as_mbit "$AS_DN"), up $(_as_mbit "$AS_UP") Mbit) - check that $AS_URL can be reached${AS_BOUND:+ through $AS_WAN}"
 		# 429: the server limits how many tests one address may run.
 		case "$AS_FD$AS_FU" in *"HTTP error 429"*)
 			AS_MSG="the test server is limiting tests from this address (HTTP error 429) - try again later, or type the line's speeds" ;;
@@ -1860,12 +1918,14 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		_as_note "No line speed yet: run the speed test, or give the line's download and upload speeds."
 	fi
 	# More than one line with a default route (failover, mwan3): QoS-Ex
-	# shapes one, and the speed test's streams may take another.
+	# shapes one. The speed test runs through it (_as_bind); one that could
+	# not be routed so ran over the router's own route.
 	_ln=0; _ls=""
 	for _v in $AS_WAN_ALL; do _ln=$((_ln + 1)); _ls="${_ls:+$_ls, }$_v"; done
 	if [ "$_ln" -gt 1 ]; then
 		_v=""
-		[ "$_src" = "the speed test" ] && _v=" The speed test may have run over more than one line: if its speeds look low, type them."
+		[ "$_src" = "the speed test" ] && [ "$(_as_kv bound "$AS_RUN")" != 1 ] &&
+			_v=" The speed test may not have run over $AS_WAN: if its speeds look low, type them."
 		_as_note "$_ln lines have a default route ($_ls). QoS-Ex shapes $AS_WAN only: send the gaming devices out through it (an mwan3 rule or pbr).$_v"
 	fi
 	# Queue: the rating's (queue_<tier>: HTB on a low-spec router, HFSC on a
