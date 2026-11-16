@@ -5,7 +5,13 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.1 · shaper 3.2.2.2**
+Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.1 · shaper 3.2.2.3**
+
+## Shaper 3.2.2.3
+
+- Fixed: with two internet lines, the **Auto Setup** speed test could end with "almost no test traffic crossed" the WAN, or give a figure that was not the WAN's. It counts the WAN set in **Setup**, but the test is the router's own traffic, and that went out by the line the router uses itself: the other one with load balancing, a failover by metric, or pbr sending only the gaming devices to the WAN. For the test only, QoS-Ex now routes the router's own traffic to the test server and to the ping host out through the WAN, by routing rules for those addresses that come before mwan3's and pbr's, and takes them out when the test ends or is stopped. LAN traffic keeps its line. In a test network with two lines, the test measured the WAN while the router's own route was on the other line, also under an mwan3-style policy and with a multipath default route.
+- Fixed: when the test server never answered (a line that is down), the test's transfers still connecting outlived the test until their connect timed out, and a test started meanwhile said "a speed test is already running". They now end with the test.
+- Changed: with two lines, step ③ no longer says the speed test may have run over more than one line. It says the test may not have run over the WAN only when the test could not be sent through it.
 
 ## Ping Filter 2.1.0.1
 
