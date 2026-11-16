@@ -365,12 +365,15 @@ app_calls() {
 		skip "peek: the mark is there now (a QoS-Ex page is open), or the Ping Filter has no run directory"
 	fi
 	# 1.4.0.2: live reads the queue from the start stamp (HFSC / HTB skip the
-	# JSON probe).
+	# JSON probe). ubus prints the reply with its own spacing ("kind": "cake"):
+	# read it with jsonfilter, never as text.
 	q=$(sv QDISC); r=$(ubus call qos-ex live 2>/dev/null)
 	case "$q" in
 		hfsc|htb) [ -n "$(jsonfilter -s "$r" -e '@.tc.egress.text' 2>/dev/null)" ] && pass "live: the $q classes as text, by the start stamp (1.4.0.2)" \
 			|| fail "live: no $q text in the reply" ;;
-		cake) case "$r" in *'"kind":"cake"'*) pass "live: CAKE as tc JSON (1.4.0.2)" ;; *) fail "live: no CAKE in the reply" ;; esac ;;
+		cake) if [ -n "$(jsonfilter -s "$r" -e "@.tc.egress.qdisc[@.kind='cake'].kind" -e "@.tc.ingress.qdisc[@.kind='cake'].kind" 2>/dev/null)" ]; then
+				pass "live: CAKE as tc JSON (1.4.0.2)"
+			else fail "live: no CAKE in the reply"; fi ;;
 		*) skip "live: the shaper is not running" ;;
 	esac
 	a=$(cs); i=0; while [ $i -lt 10 ]; do ubus call qos-ex live >/dev/null 2>&1; i=$((i + 1)); done
