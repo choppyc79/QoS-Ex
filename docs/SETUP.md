@@ -92,10 +92,10 @@ on the **Set up QoS-Ex** card. Pick one:
 
 1. Press **Auto Setup**. **Your router** shows what the router check found,
    and **① Line speed** runs the speed test (about 30 s; shaping stops while
-   it runs). If the test cannot run, type your line speeds and press **Use
-   these speeds**. Cloudflare limits how many tests one address may run:
-   after a few in a row it answers HTTP 429, so type your speeds or try
-   again later.
+   it runs; with two lines it runs over the WAN set in **Setup**). If the
+   test cannot run, type your line speeds and press **Use these speeds**.
+   Cloudflare limits how many tests one address may run: after a few in a
+   row it answers HTTP 429, so type your speeds or try again later.
 2. Once the line speed is known, go on to **② Devices**. Set your consoles
    and gaming PCs to **Gaming** and anything that downloads a lot (a NAS, a
    TV box) to **Low priority**. Consoles are set to Gaming for you from
