@@ -21,7 +21,7 @@
 # Software Foundation, either version 3 of the License, or (at your option)
 # any later version.  See <https://www.gnu.org/licenses/> for details.
 
-VERSION="3.2.2.1"
+VERSION="3.2.2.2"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="QoS-Ex"
@@ -1085,6 +1085,10 @@ _sqm_on() {
 # could otherwise mark a flood EF and fill the Gaming class. 0x80 = decided,
 # low 6 bits = DSCP (see nft_classify_chains).
 IFB_CPMARK=0xbf
+# Every conntrack-mark write keeps these bits: QoS-Ex owns only 0xff0000bf
+# (the class byte; Adaptive's flags and generation in the top byte), so
+# mwan3's line (its mmx_mask, default 0x3F00) and other tools' bits stay.
+CTM_KEEP=0x00ffff40
 # Defaults until load_config (settings.download_on): wan = IFB off the WAN.
 DL_ON=wan
 DL_LAN=0
@@ -1989,25 +1993,46 @@ nft_udp_rate_rules() {
 EOF
 }
 
-# DSCP -> connmark as constants, all 64 codepoints: $1 = map name, $2 = the
-# bits ORed in. `ct mark set ip dscp or 128` widened the one-byte DSCP into
-# the 32-bit mark in host byte order, so on a big-endian router (ath79,
-# lantiq) the DSCP landed in the top byte and ctinfo restored CS0 for every
-# download. A map's values are stored as marks, the right way round on any
-# CPU. Decimal, so no fork per element.
-nft_dscp_mark_map() {
-	local i=0 e=""
+# DSCP -> connmark, all 64 codepoints, writing only QoS-Ex's bits: one
+# chain a codepoint, `ct mark set ct mark and $CTM_KEEP or <constant>`,
+# reached through _dscp_vmap. nft cannot OR a map's value into part of the
+# mark (the rhs of `or` must be a constant), so each constant sits in a
+# chain of its own. $1 = chain prefix, $2 = the top byte in two hex digits
+# (Adaptive's generation and flags; 00 elsewhere), $3 = the low byte's bits
+# ORed in. Constants, not `ip dscp or 128`: that widened the one-byte DSCP
+# into the 32-bit mark in host byte order, so on a big-endian router
+# (ath79, lantiq) the DSCP landed in the top byte and ctinfo restored CS0
+# for every download. Text, so no shell arithmetic past 2^31 (32-bit ash).
+nft_dscp_mark_chains() {
+	local i=0
 	while [ "$i" -lt 64 ]; do
-		e="${e:+$e, }$i : $((i | $2))"
+		printf '\tchain %s%d { ct mark set ct mark and %s or 0x%s0000%02x; }\n' "$1" "$i" "$CTM_KEEP" "$2" $((i | $3))
 		i=$((i + 1))
 	done
-	printf '\tmap %s { type dscp : mark; elements = { %s } }\n' "$1" "$e"
+}
+
+# The verdict map to those chains, into _VM: `{ 0 : goto <prefix>0, ... }`;
+# goto, so the end of a chain returns from the chain the rule is in. Inline,
+# never a named map: OpenWrt's nft 1.1.1 and 1.1.6 compile `ip6 dscp vmap
+# @named` without the byte-order step before its shift, so on a
+# little-endian router (x86, aarch64, mipsel) every IPv6 packet looked up
+# codepoint 0 (measured); an inline map is matched on the header's own
+# bytes, right on any CPU. $1 = chain prefix.
+_dscp_vmap() {
+	local i=0
+	_VM=""
+	while [ "$i" -lt 64 ]; do
+		_VM="${_VM:+$_VM, }$i : goto $1$i"
+		i=$((i + 1))
+	done
+	_VM="{ $_VM }"
 }
 
 # Classify: final codepoint -> HFSC/HTB leaf via @priomap (skb->priority),
-# and DSCP | 0x80 into the connmark for the download's ctinfo (_ctinfo_act).
-# The ct mark write replaces the whole mark (_ctmark_users warns).
+# and DSCP | 0x80 into the connmark's low byte for the download's ctinfo
+# (_ctinfo_act), through the cm_ chains: the other bits stay.
 nft_classify_chains() {
+	_dscp_vmap cm_
 	printf '\tchain classify {\n'
 	# skb->priority only for an HFSC/HTB root on a shaped WAN, and only on
 	# the way out of it: elsewhere it would steer pfifo_fast bands or a VLAN
@@ -2018,7 +2043,7 @@ nft_classify_chains() {
 	# An ICMP error is RELATED and shares its flow's conntrack entry: writing
 	# its DSCP would reset that flow's mark.
 	printf '\t\tct state related meta l4proto { icmp, ipv6-icmp } return\n'
-	printf '\t\tct mark set ip dscp map @dscpmark\n\t\tct mark set ip6 dscp map @dscpmark\n\t}\n'
+	printf '\t\tip dscp vmap %s\n\t\tip6 dscp vmap %s\n\t}\n' "$_VM" "$_VM"
 }
 
 # The WAN edge of the forward chain:
@@ -2477,7 +2502,7 @@ $([ -n "$l6" ] && echo "	define lowpriolan6  = { $l6 }")
 $([ -n "$_PF_LM" ] && echo "	define lowpriomac   = { $_PF_LM }")
 
 $(nft_dscp_map)
-$(nft_dscp_mark_map dscpmark 128)
+$(nft_dscp_mark_chains cm_ 00 128)
 
 	# ----- dynamic sets -----
 $(nft_proto_sets "$SIM_UDP_RATE" "$SIM_TCP_UPGRADE")
@@ -2574,7 +2599,7 @@ table inet $NFT_ADVANCED {
 	define WAN      = "$WAN"
 
 $(nft_dscp_map)
-$(nft_dscp_mark_map dscpmark 128)
+$(nft_dscp_mark_chains cm_ 00 128)
 
 	# ----- lookup sets -----
 $(nft_adv_port_set "$HTTP_PORTS" web_ports)
@@ -2633,8 +2658,9 @@ EOF
 ### (AF11 busy UDP) and Bulk (LE) by per-connection flags. Every upload      ###
 ### packet replays the mark into DSCP (and skb->priority under HFSC/HTB).    ###
 ###   connmark  bits 0-5 DSCP  0x80 decided (ctinfo statemask)               ###
-###             0x100 STATIC  0x200 GUARD (gaming UDP)  0x400 VGUARD (video- ###
-###             call UDP)  0xf000 generation                                 ###
+###             0x01000000 STATIC  0x02000000 GUARD (gaming UDP)             ###
+###             0x04000000 VGUARD (video-call UDP)  0xf0000000 generation    ###
+###             A write keeps the other bits (CTM_KEEP): mwan3's, others'    ###
 ### The generation is a hash of the ruleset text: an identical rebuild keeps ###
 ### the table, a changed one makes live connections decide again (never the ###
 ### generation already loaded: see setup_nft_adaptive).                      ###
@@ -2662,15 +2688,18 @@ _ada_heavy() {
 }
 
 _nft_adaptive_body() {
-	local G=$(( $1 << 12 ))
-	local DEC STC EF CS5 CALL AF41 LOW BULK VPN TCPA VC=32 GB GBB
+	# The connmark constants: the generation (1-15; 0 for the hash text) is
+	# the top nibble, the flags the next (1 STATIC, 2 GUARD, 4 VGUARD), the
+	# class the low byte (0x80 | DSCP). Text: no arithmetic past 2^31.
+	local g DEC EF CS5 CALL AF41 LOW BULK VPN TCPA VC=32 VCL=a0 GB GBB
+	g=$(printf '%x' "$1")
 	# Call UDP: CS4, AF41 under CAKE (see nft_vidconf_rules).
-	[ "$QDISC" = cake ] && VC=34
-	DEC=$(printf '0x%x' $((G | 0x80)));   TCPA=$(printf '0x%x' $((G | 0x80 | 36)))
-	EF=$(printf '0x%x' $((G | 0x380 | 46)));  CS5=$(printf '0x%x' $((G | 0x180 | 40)))
-	CALL=$(printf '0x%x' $((G | 0x580 | VC))); AF41=$(printf '0x%x' $((G | 0x180 | 34)))
-	LOW=$(printf '0x%x' $((G | 0x180 | 8)));  BULK=$(printf '0x%x' $((G | 0x180 | 1)))
-	VPN=$(printf '0x%x' $((G | 0x180)));      STC=$(printf '0x%x' $((G | 0x180)))
+	[ "$QDISC" = cake ] && VC=34 VCL=a2
+	DEC=0x${g}0000080;   TCPA=0x${g}00000a4
+	EF=0x${g}30000ae;    CS5=0x${g}10000a8
+	CALL=0x${g}50000$VCL; AF41=0x${g}10000a2
+	LOW=0x${g}1000088;   BULK=0x${g}1000081
+	VPN=0x${g}1000080
 	_ada_heavy "$UPLOAD_KBPS" "$SHAPE_UP";   local hu=$_AH hub=$_AB
 	_ada_heavy "$DOWNLOAD_KBPS" "$SHAPE_DN"; local hd=$_AH hdb=$_AB
 	# The guard's byte rate: udp_fast_pps x packet_size a second, what 1:10
@@ -2693,7 +2722,7 @@ $(nft_adv_port_set "$HTTP_PORTS" web_ports)
 $(nft_adv_svc_map "$_ADA_SVC")
 $([ -n "$_ADA_SVC_SRC" ] && printf '\tmap svc_src { type inet_proto . inet_service : verdict; flags interval; elements = { %s } }\n' "$_ADA_SVC_SRC")
 $(echo "$_ADA_SETS" | grep -v '^[[:space:]]*$')
-$([ "$WASH_DOWN" = yes ] || nft_dscp_mark_map dscpstc $((STC)))
+$([ "$WASH_DOWN" = yes ] || nft_dscp_mark_chains st_ "${g}1" 128)
 
 	# ----- replay: connmark DSCP bits -> packet DSCP / HFSC-HTB leaf -----
 	map dscp_of { type mark : verdict; elements = { $_ADA_DSCP } }
@@ -2731,10 +2760,10 @@ $(nft_ack_jump)
 		# An ICMP error is RELATED and shares its flow's conntrack: it replays
 		# the flow's class and never re-judges it (auto would rewrite it).
 		ct state related meta l4proto { icmp, ipv6-icmp } goto replay
-		ct mark and 0xf080 != $DEC jump decide
-		ct mark and 0x100 == 0 jump auto
-		ct mark and 0x200 != 0 jump guard
-		ct mark and 0x400 != 0 jump vguard
+		ct mark and 0xf0000080 != $DEC jump decide
+		ct mark and 0x01000000 == 0 jump auto
+		ct mark and 0x02000000 != 0 jump guard
+		ct mark and 0x04000000 != 0 jump vguard
 		goto replay
 	}
 
@@ -2751,17 +2780,17 @@ $(nft_wash_up_rule)
 	chain down {
 $([ "$WASH_DOWN" = yes ] && if [ "$QDISC" != cake ] || [ "$SHAPE_DN" = 0 ]; then printf '\t\tcounter jump set_cs0\n'; elif [ "$DL_LAN" = 1 ]; then printf '\t\toifname != "%s" counter jump set_cs0\n' "$IFB"; fi)
 		ct state related meta l4proto { icmp, ipv6-icmp } accept
-		ct mark and 0x180 == 0x80 jump auto
-		ct mark and 0x200 != 0 jump guard
-		ct mark and 0x400 != 0 jump vguard
+		ct mark and 0x01000080 == 0x80 jump auto
+		ct mark and 0x02000000 != 0 jump guard
+		ct mark and 0x04000000 != 0 jump vguard
 		accept
 	}
 
 	# Once per connection, and again after a ruleset change.
 	chain decide {
 		ct state related meta l4proto { icmp, ipv6-icmp } return
-$([ "$WASH_DOWN" = yes ] || printf '\t\tip dscp != cs0 ct mark set ip dscp map @dscpstc return\n\t\tip6 dscp != cs0 ct mark set ip6 dscp map @dscpstc return\n')
-		ct mark set $DEC
+$([ "$WASH_DOWN" = yes ] || { _dscp_vmap st_; printf '\t\tip dscp != cs0 ip dscp vmap %s\n\t\tip6 dscp != cs0 ip6 dscp vmap %s\n' "$_VM" "$_VM"; })
+		ct mark set ct mark and $CTM_KEEP or $DEC
 $([ -n "$_PF_GM" ] && printf '\t\tmeta l4proto udp ether saddr @gaming_mac ct original proto-dst != @web_ports goto s_ef\n')
 $([ -n "$_PF_G4" ] && printf '\t\tmeta l4proto udp ip saddr @gaming4 ct original proto-dst != @web_ports goto s_ef\n')
 $([ -n "$_PF_G6" ] && printf '\t\tmeta l4proto udp ip6 saddr @gaming6 ct original proto-dst != @web_ports goto s_ef\n')
@@ -2773,15 +2802,15 @@ $([ -n "$_ADA_SVC_SRC" ] && printf '\t\tmeta l4proto . th sport vmap @svc_src\n'
 		icmp type echo-request goto s_cs5
 		icmpv6 type echo-request goto s_cs5
 $([ -n "$_ADA_P2P" ] && printf '\t\tct state new ct original proto-dst != @web_ports update @new_conn4 { ct original ip saddr limit rate over %s/minute burst %s packets } update @p2p4 { ct original ip saddr }\n\t\tct state new ct original proto-dst != @web_ports update @new_conn6 { ct original ip6 saddr limit rate over %s/minute burst %s packets } update @p2p6 { ct original ip6 saddr }\n' "$_ADA_P2P" "$_ADA_P2P" "$_ADA_P2P" "$_ADA_P2P")
-		meta l4proto tcp ct mark set $TCPA
+		meta l4proto tcp ct mark set ct mark and $CTM_KEEP or $TCPA
 	}
-	chain s_ef   { ct mark set $EF; }
-	chain s_cs5  { ct mark set $CS5; }
-	chain s_call { ct mark set $CALL; }
-	chain s_af41 { ct mark set $AF41; }
-	chain s_low  { ct mark set $LOW; }
-	chain s_bulk { ct mark set $BULK; }
-	chain s_vpn  { ct mark set $VPN; }
+	chain s_ef   { ct mark set ct mark and $CTM_KEEP or $EF; }
+	chain s_cs5  { ct mark set ct mark and $CTM_KEEP or $CS5; }
+	chain s_call { ct mark set ct mark and $CTM_KEEP or $CALL; }
+	chain s_af41 { ct mark set ct mark and $CTM_KEEP or $AF41; }
+	chain s_low  { ct mark set ct mark and $CTM_KEEP or $LOW; }
+	chain s_bulk { ct mark set ct mark and $CTM_KEEP or $BULK; }
+	chain s_vpn  { ct mark set ct mark and $CTM_KEEP or $VPN; }
 
 	# AUTO: unlisted traffic, re-judged on every packet from its flags.
 	chain auto {
@@ -3077,8 +3106,8 @@ _start_locked() {
 	calc_bandwidth
 	_ct_acct_on
 	_QOS_EX_CTM=$(_ctmark_users)
-	[ -z "$_QOS_EX_CTM" ] || { printf '[%s] WARNING: %s\n' "$DISPLAY_NAME" "$_QOS_EX_CTM enabled - QoS-Ex rewrites the whole conntrack mark, so its per-connection marks do not hold"
-		_logline "WARN" "$_QOS_EX_CTM enabled - QoS-Ex rewrites the whole conntrack mark, so its per-connection marks do not hold"; }
+	[ -z "$_QOS_EX_CTM" ] || { printf '[%s] WARNING: %s\n' "$DISPLAY_NAME" "$_QOS_EX_CTM's mmx_mask overlaps the conntrack-mark bits QoS-Ex writes (0xff0000bf), so its line choices do not hold - the default 0x3F00 does not overlap"
+		_logline "WARN" "$_QOS_EX_CTM's mmx_mask overlaps the conntrack-mark bits QoS-Ex writes (0xff0000bf), so its line choices do not hold - the default 0x3F00 does not overlap"; }
 	[ "$SHAPE_UP$SHAPE_DN" != 00 ] || { err "upload_kbps and download_kbps are both 0 - nothing to shape"; return 1; }
 	if [ "$DL_LAN" = 1 ] && [ "$SHAPE_DN" = 1 ]; then
 		if [ -z "$LAN_DEV" ] || ! ip link show "$IFB" >/dev/null 2>&1; then
@@ -3373,38 +3402,68 @@ _lan_dev() {
 	echo "$_d"
 }
 
-# The device carrying the default route: netifd's answer via network.sh,
-# else `ip route`. Empty = unknown (line down), never "wrong".
+# The device of the line in use: of netifd's interfaces with a main-table
+# IPv4 default route, the one with the lowest metric (the metric in its
+# status: netifd gives its routes that metric), the first by name on a tie.
+# network_find_wan alone is the first by name, so a backup line keeping its
+# own default route at a higher metric (failover, mwan3) won when its name
+# sorted first (4g, lte, usb before wan). Without netifd, the lowest-metric
+# default route `ip route` shows. Empty = unknown (line down), never "wrong".
 _wan_live() {
-	local _wl_if="" _wl_dev=""
+	local _wl_dev=""
 	# A subshell here: network.sh sources jshn.sh unguarded, and a missing
 	# file is fatal to the sourcing shell.
 	if [ -f /lib/functions/network.sh ] && [ -f /usr/share/libubox/jshn.sh ]; then
 		_wl_dev=$(
 			. /lib/functions/network.sh 2>/dev/null
-			command -v network_find_wan >/dev/null 2>&1 || exit 0
-			network_find_wan _wl_if 2>/dev/null
-			[ -n "$_wl_if" ] || exit 0
-			network_get_device _wl_dev "$_wl_if" 2>/dev/null
+			command -v network_get_device >/dev/null 2>&1 || exit 0
+			_b="" _bm=0 _l=""
+			_wan_ifs _l
+			for _i in $_l; do
+				_m=""; __network_ifstatus _m "$_i" ".metric" 2>/dev/null
+				_isnum "$_m" || _m=0
+				[ -n "$_b" ] && [ "$_m" -ge "$_bm" ] && continue
+				_b=$_i; _bm=$_m
+			done
+			[ -n "$_b" ] || exit 0
+			network_get_device _wl_dev "$_b" 2>/dev/null
 			echo "$_wl_dev"
 		)
 	fi
-	# First default route = the primary line right now.
 	if [ -z "$_wl_dev" ]; then
-		_wl_dev=$(ip -4 route show default 2>/dev/null | \
-			awk '$1 == "default" { for (i = 2; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
+		_wl_dev=$(ip -4 route show default 2>/dev/null | awk '
+			$1 == "default" { d = ""; m = 0
+				for (i = 2; i < NF; i++) { if ($i == "dev") d = $(i + 1); else if ($i == "metric") m = $(i + 1) + 0 }
+				if (d != "" && (b == "" || m < bm)) { b = d; bm = m } }
+			END { print b }')
 	fi
 	echo "$_wl_dev"
 }
 
-# Enabled users of the conntrack mark (mwan3, pbr): classify writes the WHOLE
-# mark (DSCP | 0x80), so theirs do not hold. Space separated; empty = none.
+# netifd's interfaces with a main-table IPv4 default route, by name, into
+# the variable named $1, in a shell that has sourced network.sh: the filter
+# of network_find_wan without its limit of one. __network_ifstatus is
+# network.sh's own (24.10 and 25.12); without it, network_find_wan's one.
+_wan_ifs() {
+	if command -v __network_ifstatus >/dev/null 2>&1; then
+		__network_ifstatus "$1" "" "[@.route[@.target='0.0.0.0' && !@.table]].interface" 2>/dev/null
+	else
+		network_find_wan "$1" 2>/dev/null
+	fi
+}
+
+# A tool whose conntrack-mark bits QoS-Ex would overwrite: mwan3, only when
+# its mmx_mask (default 0x3F00) was moved onto QoS-Ex's bits (0xff0000bf, all
+# but CTM_KEEP). pbr marks packets only. Empty = none. Two hex digits at a
+# time: 0xff000000 is past 2^31 for a 32-bit ash.
 _ctmark_users() {
-	local _s _o=""
-	for _s in mwan3 pbr; do
-		_svc_enabled "$_s" && _o="${_o:+$_o }$_s"
-	done
-	echo "$_o"
+	local _m
+	_svc_enabled mwan3 || return 0
+	_m=$(uci -q get mwan3.globals.mmx_mask); _m=${_m:-0x3F00}; _m=${_m#0[xX]}
+	case "$_m" in ''|*[!0-9A-Fa-f]*) return 0 ;; esac
+	while [ ${#_m} -lt 8 ]; do _m=0$_m; done
+	[ ${#_m} = 8 ] || return 0
+	[ $((0x${_m%??????})) = 0 ] && [ $((0x${_m#??????} & 0xbf)) = 0 ] || echo mwan3
 }
 
 # A service's autostart, from its rc.d symlink: what `/etc/init.d/X enabled`
@@ -3921,12 +3980,12 @@ status() {
 			echo "       set $UCI_CFG.settings.mss=auto to have it clamp that side only"
 		fi
 	fi
-	# nft cannot fold a packet-derived value into part of the mark (the rhs
-	# of | must be constant), so this is reported, not worked around.
+	# QoS-Ex writes only its own conntrack-mark bits: mwan3 clashes only
+	# with an mmx_mask moved onto them (_ctmark_users).
 	for _s in $_ctm; do
-		echo "  [!!] $_s is enabled: QoS-Ex rewrites the whole conntrack mark on every"
-		echo "       classified packet, which erases $_s's per-connection mark - its"
-		echo "       routing choices will not hold while both run"
+		echo "  [!!] $_s's mmx_mask overlaps the conntrack-mark bits QoS-Ex writes"
+		echo "       (0xff0000bf), so $_s's line choices will not hold; its default,"
+		echo "       0x3F00, does not overlap (uci show $_s.globals)"
 	done
 	[ "$(_file_drift "/root/$SCRIPT_NAME.sh" "$QOS_EX_BIN")" = 1 ] && \
 		echo "  [!!] /root/$SCRIPT_NAME.sh differs from $QOS_EX_BIN - reload/restart rebuild from the INSTALLED copy; run: sh QoS-Ex.sh install"
