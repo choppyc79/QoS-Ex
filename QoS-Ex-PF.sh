@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.1.0.0"
+VERSION="2.1.0.1"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -473,7 +473,7 @@ pf_load_config() {
 	PF_PING_COUNT=5           # ICMP echoes per probe (median, first dropped)
 	PF_PROBE_RETRIES=5        # re-probes of a server with no or a blocking ping
 	PF_AREA_KM=150            # measured servers this near lend their ping:
-	PF_AREA_MIN=3             # ... the median of this many, else the nearest
+	PF_AREA_MIN=1             # ... the median of this many or more
 	PF_DIST_BASE_MS=10        # distance model: base + km x slope (us/km),
 	PF_DIST_SLOPE_US=18       # ... rescaled by this link's measured /24s
 	PF_GEO_RETRY=60           # s before a failed location lookup is retried
@@ -505,7 +505,7 @@ pf_load_config() {
 	PF_TELE_CKPT_WIN=12       # jitter windows that make one graded segment
 	PF_TELE_EWMA_REF=90       # segment length the history EWMA was tuned for
 	PF_MAC_REFRESH=30         # how often a MAC device's address is re-read
-	PF_GEO_PER_PASS=2         # idle pass (backfill): locations queued, and applied
+	PF_GEO_PER_PASS=2         # a pass: locations applied (idle: and queued)
 	PF_TELE_CKPT=90           # graded segment length (s), over session_min
 	PF_TELE_FINALIZE=25       # idle wait (s) before a session is folded in
 	PF_JSON_MAX=800           # servers in one JSON reply (ubus: 1 MiB a message)
@@ -1209,29 +1209,30 @@ _pf_p24_low() {
 	' "$PF_SERVERS_TSV" 2>/dev/null || echo 0
 }
 # The best UNMEASURED figure into PF_E_MS / PF_E_SRC, in ms whenever one can
-# be had: measured servers in the same /24 > its /24 memory > the area >
-# the distance model (last resort) > -1 pending.
+# be had, measured servers first: the same /24's lowest > the area's median
+# (_pf_geo_est) > its /24 memory (earlier readings in its /24) > the nearest
+# /24 in the memory within the area > the distance model (last resort) > -1
+# pending.
 _pf_estimate() {
 	PF_E_MS=-1; PF_E_SRC=pending
-	local _e
+	local _e _m=0
 	_e=$(_pf_p24_low "$1")
 	if [ "$_e" -gt 0 ] 2>/dev/null; then
 		PF_E_MS=$_e; PF_E_SRC=prefix; return 0
 	fi
-	if _pf_prefix_get "$1" && [ "$PF_P_RTT" -gt 0 ] 2>/dev/null; then
-		PF_E_MS=$PF_P_RTT; PF_E_SRC=prefix; return 0
-	fi
-	_e=$(_pf_geo_est "$2" "$3")
-	[ "${_e%% *}" -gt 0 ] 2>/dev/null && { PF_E_MS=${_e%% *}; PF_E_SRC=${_e#* }; }
+	_pf_prefix_get "$1" && [ "$PF_P_RTT" -gt 0 ] 2>/dev/null && _m=$PF_P_RTT
+	_e=$(_pf_geo_est "$2" "$3" "" "$_m")
+	if [ "${_e%% *}" -gt 0 ] 2>/dev/null; then PF_E_MS=${_e%% *}; PF_E_SRC=${_e#* }
+	elif [ "$_m" -gt 0 ]; then PF_E_MS=$_m; PF_E_SRC=prefix; fi
 	return 0
 }
 
-# "ms area" | "ms distance" | "-1 pending", from MEASURED readings that carry
-# a location:
-#  area     -- area_min or more measured servers within area_km: their
-#              MEDIAN ping (of the ICMP readings when area_min of them are
-#              ICMP; handshake RTT reads high), lowered area_adjust_pct
-#              percent. Fewer: the nearest measured /24 within area_km.
+# "ms area" | "ms prefix" | "ms distance" | "-1 pending", in this order:
+#  area     -- area_min or more MEASURED servers within area_km (rows with
+#              a location, ICMP and handshake alike): their MEDIAN ping,
+#              lowered area_adjust_pct percent;
+#  prefix   -- $4: the server's /24 memory (_pf_estimate), when set;
+#  area     -- the nearest /24 in the memory within area_km;
 #  distance -- dist_base_ms + km*dist_slope_us, scaled by this link's mean
 #              measured/model ratio over known blocks, each weighted by
 #              1 / (1 + (km/1000)^2), with a 0.25-weight prior at 1.0.
@@ -1247,14 +1248,14 @@ _pf_geo_est() {
 	[ -z "$3" ] && [ "${PF_AREA_MIN:-0}" -gt 0 ] 2>/dev/null && [ -s "$PF_SERVERS_TSV" ] && _s=$PF_SERVERS_TSV
 	awk -F'\t' -v la="$1" -v lo="$2" -v hla="$PF_HOME_LAT" -v hlo="$PF_HOME_LON" -v km="$3" \
 	    -v b="${PF_DIST_BASE_MS:-10}" -v sl="${PF_DIST_SLOPE_US:-18}" -v ak="${PF_AREA_KM:-150}" \
-	    -v am="${PF_AREA_MIN:-0}" -v adj="${PF_AREA_ADJ:-0}" -v sf="$_s" \
+	    -v am="${PF_AREA_MIN:-0}" -v adj="${PF_AREA_ADJ:-0}" -v sf="$_s" -v mem="${4:-0}" \
 	    -v now="${PF_NOW:-$(date +%s)}" -v ttl="${PF_PREFIX_TTL:-0}" "$PF_HAV_AWK$PF_MED_AWK"'
 		function model(k) { return b + k * sl / 1000 }
 		BEGIN { d = (km != "") ? km + 0 : hav(hla, hlo, la, lo); if (km != "") ak = 0
-			sw = 0.25; sr = 0.25; best = -1; an = 0; ni = 0 }
+			sw = 0.25; sr = 0.25; best = -1; an = 0 }
 		FILENAME == sf {
 			if (ak + 0 > 0 && $3 + 0 > 0 && ($4 == "icmp" || $4 == "real") && ($5 + 0 != 0 || $6 + 0 != 0) \
-			    && hav(la, lo, $5, $6) <= ak + 0) { A[++an] = $3 + 0; if ($4 == "icmp") I[++ni] = $3 + 0 }
+			    && hav(la, lo, $5, $6) <= ak + 0) A[++an] = $3 + 0
 			next
 		}
 		NF >= 9 && $3 + 0 > 0 && ($5 + 0 != 0 || $6 + 0 != 0) && (now - $9) < ttl + 0 {
@@ -1266,10 +1267,11 @@ _pf_geo_est() {
 		}
 		END {
 			if (am + 0 > 0 && an >= am + 0) {
-				v = (ni >= am + 0) ? med(I, ni) : med(A, an)
+				v = med(A, an)
 				v = int(v * (100 - adj) / 100 + 0.5); if (v < 1) v = 1
 				printf "%d area\n", v; exit
 			}
+			if (mem + 0 > 0) { printf "%d prefix\n", mem; exit }
 			if (best >= 0) { printf "%d area\n", arr; exit }
 			f = sr / sw; if (f < 0.5) f = 0.5; if (f > 3) f = 3
 			v = model(d) * f; if (v < d / 100) v = d / 100; if (v < 1) v = 1
@@ -3728,16 +3730,20 @@ _pf_geo_known() {
 
 # Heal cached rows whose geo never resolved (0/0) or that lack both country
 # and city: the flow loop only retries live servers, and in distance mode
-# unresolved means blocked. From the IDLE scan only, with no lookup in the
-# call: at most $1 (default 2) locations the cache holds are applied, and as
-# many addresses handed to the background worker (_pf_geo_worker), whose
-# answers a later pass applies. Rows with a fresh negative-cache entry are
-# skipped, so one unresolvable IP cannot starve the rest. A healed row is
-# re-graded and seeded. Pinned IPs (whitelist / blacklist) go FIRST, so they
-# can be mapped (pf_servers_json joins them against $PF_GEO_CACHE); skipped
-# once located, never graded (the pin is the verdict).
+# unresolved means blocked. With no lookup in the call: at most $1 (default
+# 2) locations the cache holds are applied (_GH = how many), and as many
+# addresses handed to the background worker (_pf_geo_worker), whose answers
+# a later pass applies; with $2 = cache (a live pass, _pf_geo_live) only the
+# cache's locations. Rows with a fresh negative-cache entry are skipped,
+# so one unresolvable IP cannot starve the rest. A healed row is re-graded
+# and seeded. Pinned IPs (whitelist / blacklist) go FIRST, so they can be
+# mapped (pf_servers_json joins them against $PF_GEO_CACHE); skipped once
+# located, never graded (the pin is the verdict). Then measured servers:
+# they lend their ping to the servers near them (_pf_estimate,
+# _pf_area_verdict), which find them by the location in their row.
 pf_geo_backfill() {
 	local max="${1:-${PF_GEO_PER_PASS:-2}}"
+	_GH=0
 	[ "${PF_GEOIP_LOOKUP:-yes}" = "yes" ] || return 0
 	# Pinned IPs alone are a valid backlog (a manual list, empty servers.tsv).
 	local pinned
@@ -3747,7 +3753,7 @@ pf_geo_backfill() {
 	[ -f "$PF_GEO_CACHE" ] || : > "$PF_GEO_CACHE"
 	local todo
 	todo=$(awk -F'\t' -v now="$(date +%s)" -v pin="$pinned" \
-	    -v gf="$PF_GEO_CACHE" '
+	    -v gf="$PF_GEO_CACHE" -v co="$2" '
 		# NOT NR == FNR: when the geo cache is EMPTY (fresh install, or
 		# right after Clear cache) it yields zero records, NR and FNR stay
 		# equal for the whole of servers.tsv, and the entire backlog is
@@ -3761,18 +3767,24 @@ pf_geo_backfill() {
 			next
 		}
 		($5 == "" || $5 == "0" || $6 == "" || $6 == "0") || ($7 == "" && $8 == "") {
-			if (!($1 in NEG) && !($1 in TQS)) { TQS[$1] = 1; TQ[++tn] = $1 }
+			if (!($1 in NEG) && !($1 in TQS)) {
+				TQS[$1] = 1; TQ[++tn] = $1
+				if ($4 == "icmp" || $4 == "real") MS[$1] = 1
+			}
 		}
 		END {
-			np = split(pin, PA, /[ \t\n]+/)
-			for (i = 1; i <= np; i++) {
-				ip = PA[i]
-				if (ip == "" || ip in NEG || ip in GOOD || ip in OUT) continue
-				OUT[ip] = 1; print ip
+			if (co != "cache") {
+				np = split(pin, PA, /[ \t\n]+/)
+				for (i = 1; i <= np; i++) {
+					ip = PA[i]
+					if (ip == "" || ip in NEG || ip in GOOD || ip in OUT) continue
+					OUT[ip] = 1; print ip
+				}
 			}
-			for (i = 1; i <= tn; i++) {
+			# Measured rows, then the rest; a live pass takes cached ones only.
+			for (k = 1; k <= 2; k++) for (i = 1; i <= tn; i++) {
 				ip = TQ[i]
-				if (ip in OUT) continue
+				if ((ip in OUT) || (k == 1) != (ip in MS) || (co == "cache" && !(ip in GOOD))) continue
 				OUT[ip] = 1; print ip
 			}
 		}
@@ -3790,11 +3802,42 @@ pf_geo_backfill() {
 		if _pf_geo_fresh "$ip"; then
 			[ "$nh" -lt "$max" ] || continue
 			_pf_geo_heal "$ip"; nh=$((nh + 1))
-		elif [ "$nq" -lt "$max" ]; then
+		elif [ "$nq" -lt "$max" ] && [ "$2" != cache ]; then
 			q="$q $ip"; nq=$((nq + 1))
 		fi
 	done
+	_GH=$nh
 	[ -n "$q" ] && _pf_geo_worker "$q"
+	return 0
+}
+# Before a re-grade (pf_reclassify_locked, the TSV lock held): the cache's
+# location into every row that has none, in one pass and no network. A
+# measured server not located yet would lend its ping to nothing.
+_pf_geo_rows() {
+	local tmp="$PF_SERVERS_TSV.gr.$$"
+	[ -s "$PF_GEO_CACHE" ] && [ -s "$PF_SERVERS_TSV" ] || return 0
+	awk -F'\t' -v OFS='\t' -v gf="$PF_GEO_CACHE" '
+		FILENAME == gf { if ($2 + 0 != 0 && $3 + 0 != 0) { LA[$1] = $2; LO[$1] = $3; CO[$1] = $4; CI[$1] = $5 }; next }
+		($1 in LA) && ($5 + 0 == 0 || $6 + 0 == 0) {
+			$5 = LA[$1]; $6 = LO[$1]; if ($7 == "") $7 = CO[$1]; if ($8 == "") $8 = CI[$1]; n++
+		}
+		{ print }
+		END { exit (n ? 0 : 1) }' "$PF_GEO_CACHE" "$PF_SERVERS_TSV" > "$tmp" 2>/dev/null \
+		&& pf_tsv_replace "$tmp" "$PF_SERVERS_TSV" 50
+	rm -f "$tmp" 2>/dev/null
+	return 0
+}
+# A live pass: the locations the cache holds, for rows that are not live (a
+# row seen for a moment during play, matchmaking's probes: a server measured
+# then stays without a location until 10 minutes without gaming, and the
+# servers near it cannot use its ping). Runs when the cache changed since the
+# last run, or when that run applied its whole share (more may be waiting).
+_pf_geo_live() {
+	local s="$PF_RUN_DIR/.geo-live"
+	[ -f "$s" ] && [ "$s" -nt "$PF_GEO_CACHE" ] && return 0
+	echo 1 > "$s" 2>/dev/null
+	pf_geo_backfill "${PF_GEO_PER_PASS:-2}" cache
+	[ "$_GH" -ge "${PF_GEO_PER_PASS:-2}" ] && rm -f "$s" 2>/dev/null
 	return 0
 }
 
@@ -4551,6 +4594,7 @@ pf_scan_once() {
 		if _pf_geo_fresh "$_gi"; then _pf_geo_heal "$_gi" quiet; else _gw="$_gw $_gi"; fi
 	done
 	_pf_geo_worker "$_gw"
+	_pf_geo_live
 
 	rm -f "$flow_data" 2>/dev/null
 	pf_cache_age_out
@@ -4592,6 +4636,9 @@ pf_reclassify_locked() {
 	# instead of forking date per row.
 	local PF_NOW; PF_NOW=$(date +%s)
 	pf_tsv_lock || return 1
+	# Every row with the location the cache holds, before any is graded:
+	# each is graded on its neighbours' rows (_pf_estimate, _pf_area_verdict).
+	_pf_geo_rows
 	local snap="$PF_SERVERS_TSV.rc.snap.$$"
 	local tmp="$PF_SERVERS_TSV.rc.$$"
 	cp "$PF_SERVERS_TSV" "$snap" 2>/dev/null || { pf_tsv_unlock; return 1; }
@@ -6851,10 +6898,11 @@ How a new server is graded (ping mode)
   2. An ICMP burst is sent (the median counts; it gives up at 2 s). Silent
      hosts, and hosts blocked on their own echo, are re-probed up to
      $PF_PROBE_RETRIES times while live.
-  3. No echo: an estimate is used instead -- the lowest measured server in
-     the same /24, then the median of $PF_AREA_MIN+ measured servers within
-     $PF_AREA_KM km lowered area_adjust_pct (else the nearest one), then
-     distance from home as the last resort.
+  3. No echo: an estimate is used instead, measured servers first -- the
+     lowest in the same /24, then the median of those within $PF_AREA_KM km
+     (ICMP and handshake alike) lowered area_adjust_pct; then earlier
+     readings in its /24, then the nearest such /24 within $PF_AREA_KM km,
+     then distance from home as the last resort.
   Every reading is an upper bound: a server takes a lower one, never a
   higher one (Re-check cache and its play may raise it). An estimate is the
   last resort: a handshake replaces it, except one over the limit from one
