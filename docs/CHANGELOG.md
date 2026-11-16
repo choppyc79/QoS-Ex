@@ -5,7 +5,15 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.3 · Ping Filter 2.0.9.9 · shaper 3.2.2.1**
+Current: **LuCI app 1.4.0.3 · Ping Filter 2.0.9.9 · shaper 3.2.2.2**
+
+## Shaper 3.2.2.2
+
+- Fixed: with two lines and mwan3 load balancing, connections hopped from one line to the other. QoS-Ex wrote the whole conntrack mark, where mwan3 keeps each connection's line, so mwan3 picked a line again and the server saw the connection come from the other address: TCP connections were reset and a game saw a new player. In failover, Adaptive shaping the backup line lost every UDP packet. QoS-Ex now writes only its own bits of the mark (the class, and Adaptive's top byte) and leaves the rest. In a test network with two lines, no connection hopped and none was reset, with each rule set.
+- Changed: the warning "pbr enabled - QoS-Ex rewrites the whole conntrack mark" is gone: pbr does not use the conntrack mark. mwan3 is warned about only when its `mmx_mask` was changed so it overlaps the bits QoS-Ex uses (`0xFF0000BF`); its default, `0x3F00`, does not.
+- Fixed: with a second line that keeps its own default route (failover by metric, or mwan3), QoS-Ex took the WAN from the line whose interface name sorts first, not the line in use: a backup named `4g`, `lte` or `usb` came before `wan`. A new install and the note under **WAN interface** in **Setup** now take the line with the lowest metric.
+- Changed: **Auto Setup** keeps the WAN set in **Setup** while a default route uses it, instead of offering to move it to the other line, and its speed test counts that line. With two lines, a note names them and the one QoS-Ex shapes.
+- Not changed: classes, queues and the download's DSCP restore. Adaptive's open connections are classified once more after the update, as after any shaper update.
 
 ## LuCI app 1.4.0.3
 
