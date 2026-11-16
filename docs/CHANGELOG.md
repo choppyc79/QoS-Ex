@@ -5,7 +5,13 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.1 · shaper 3.2.2.1**
+Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.1 · shaper 3.2.2.3**
+
+## Shaper 3.2.2.3
+
+- Fixed: with two internet lines, the **Auto Setup** speed test could end with "almost no test traffic crossed" the WAN, or give a figure that was not the WAN's. It counts the WAN set in **Setup**, but the test is the router's own traffic, and that went out by the line the router uses itself: the other one with load balancing, a failover by metric, or pbr sending only the gaming devices to the WAN. For the test only, QoS-Ex now routes the router's own traffic to the test server and to the ping host out through the WAN, by routing rules for those addresses that come before mwan3's and pbr's, and takes them out when the test ends or is stopped. LAN traffic keeps its line. In a test network with two lines, the test measured the WAN while the router's own route was on the other line, also under an mwan3-style policy and with a multipath default route.
+- Fixed: when the test server never answered (a line that is down), the test's transfers still connecting outlived the test until their connect timed out, and a test started meanwhile said "a speed test is already running". They now end with the test.
+- Changed: with two lines, step ③ no longer says the speed test may have run over more than one line. It says the test may not have run over the WAN only when the test could not be sent through it.
 
 ## Ping Filter 2.1.0.1
 
@@ -23,6 +29,14 @@ Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.1 · shaper 3.2.2.1**
 - Fixed: with Ping Catch, the game's first exchange over the catch on one connect no longer leaves the server playing on its estimate until a second connect. The server stays out of the game until a second connect confirms the reading (then it is blocked) or a lower one lets it in.
 - Changed: with Ping Catch, a server reached while another server of the same device is in play is judged on its own ping like any new server, and a server is kept for the match only if the game was let through to it. Before, such a server was let in on trust for that match.
 - Not changed: inside the radius every server is let in; a server's own ping at or under the catch lets it in; the /24 group; a server let in and played is still kept until the game on it ends; ping mode and the radius alone work as before. With a country list, a server with no ping of its own is still let in on its estimate: every new server is held there, so nothing could time it.
+
+## Shaper 3.2.2.2
+
+- Fixed: with two lines and mwan3 load balancing, connections hopped from one line to the other. QoS-Ex wrote the whole conntrack mark, where mwan3 keeps each connection's line, so mwan3 picked a line again and the server saw the connection come from the other address: TCP connections were reset and a game saw a new player. In failover, Adaptive shaping the backup line lost every UDP packet. QoS-Ex now writes only its own bits of the mark (the class, and Adaptive's top byte) and leaves the rest. In a test network with two lines, no connection hopped and none was reset, with each rule set.
+- Changed: the warning "pbr enabled - QoS-Ex rewrites the whole conntrack mark" is gone: pbr does not use the conntrack mark. mwan3 is warned about only when its `mmx_mask` was changed so it overlaps the bits QoS-Ex uses (`0xFF0000BF`); its default, `0x3F00`, does not.
+- Fixed: with a second line that keeps its own default route (failover by metric, or mwan3), QoS-Ex took the WAN from the line whose interface name sorts first, not the line in use: a backup named `4g`, `lte` or `usb` came before `wan`. A new install and the note under **WAN interface** in **Setup** now take the line with the lowest metric.
+- Changed: **Auto Setup** keeps the WAN set in **Setup** while a default route uses it, instead of offering to move it to the other line, and its speed test counts that line. With two lines, a note names them and the one QoS-Ex shapes.
+- Not changed: classes, queues and the download's DSCP restore. Adaptive's open connections are classified once more after the update, as after any shaper update.
 
 ## LuCI app 1.4.0.3
 

@@ -105,7 +105,9 @@ What the router check found:
 
 - the model, and how it rates the router (below);
 - CPU cores and speed, memory and free flash;
-- the WAN device, and the port under it (driver, link speed, queues);
+- the WAN device (the one set in Setup while a default route uses it,
+  else the line in use), and the port under it (driver, link speed,
+  queues);
 - DSL sync rates, on a router with a DSL modem.
 
 Anything QoS-Ex needs that is missing (a kernel module or a package), and
@@ -129,8 +131,10 @@ changed in the `autosetup` section
 
 The speed test downloads and uploads from Cloudflare's speed servers for
 about 30 seconds (up to 1500 MB each way). Shaping and the Ping Filter are
-paused while it runs. It then shows each speed against the WAN port's, and
-what held it back:
+paused while it runs. With two internet lines it goes out through the WAN
+set in **Setup** (the line QoS-Ex shapes), even when the router's own
+traffic normally takes the other line. It then shows each speed against
+the WAN port's, and what held it back:
 
 - **the line**: the result is your line speed;
 - **the WAN port**: the result is the port's top speed, and the line may be
@@ -177,9 +181,10 @@ by its address on Setup is left as it is.
 
 Each suggested change is a row with its reason. Untick any you do not want.
 
-- **Line** — the WAN device (only when Setup has the wrong one), the line
-  speeds, the link layer and the overhead. The speed row also shows the rate
-  QoS-Ex will shape at once **Headroom** is taken off.
+- **Line** — the WAN device (only when the one in Setup has no default
+  route), the line speeds, the link layer and the overhead. The speed row
+  also shows the rate QoS-Ex will shape at once **Headroom** is taken off.
+  With two lines, a note names them and the one QoS-Ex shapes.
 - **Queue and rules** — the queue type, its leaf queue and the rule set for
   your router's rating. The queue is one step lighter (never two) when the
   speed test was held by the router's CPU, and HFSC replaces CAKE on a
@@ -534,7 +539,8 @@ rules.
 ### Line
 
 - **WAN interface** — the device your internet line is on. The note under
-  it names the one in use now (for example `pppoe-wan`). A device that does
+  it names the one in use now (for example `pppoe-wan`; with two lines, the
+  one with the lower metric). A device that does
   not exist, or a switch's CPU port, stops QoS-Ex from starting and says
   so. One that exists but is not your line is flagged as a WAN mismatch.
 - **Download rate (Mbps)** and **Upload rate (Mbps)** — your line speed as a
@@ -690,8 +696,8 @@ The page to open when something is wrong. It shows:
   ruleset → service → interface hook. A fault in one part breaks the parts
   after it, so **the first red check is the cause**.
 - warnings for a WAN interface that is not your line, flow offloading left
-  on, conntrack accounting off, and mwan3 or pbr enabled (they use the same
-  connection mark as QoS-Ex);
+  on, conntrack accounting off, and mwan3 with an `mmx_mask` that overlaps
+  the connection-mark bits QoS-Ex uses;
 - the rates in force, the installed files, each class's queue (the CAKE
   settings under CAKE), the class rates (HFSC / HTB), and the gaming and
   low-priority devices by name.
