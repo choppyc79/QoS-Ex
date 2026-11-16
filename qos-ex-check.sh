@@ -123,6 +123,12 @@ shaper() {
 	w=$(awk '$1 == "default" { d = ""; m = 0; for (i = 2; i < NF; i++) { if ($i == "dev") d = $(i + 1); else if ($i == "metric") m = $(i + 1) + 0 }
 		if (d != "" && (b == "" || m < bm)) { b = d; bm = m } } END { print b }' "$T/routes")
 	[ -z "$w" ] || { [ "$(st wan_live)" = "$w" ] && pass "wan_live $w: the lowest-metric default route (shaper 3.2.2.2)" || fail "wan_live=$(st wan_live), the lowest-metric default route is on $w"; }
+	# Shaper 3.2.2.3: the speed test's routing rules (pref and table 900) go
+	# when it ends.
+	n=$(ip -4 rule show 2>/dev/null | grep -cE '^900:.* lookup 900( |$)')
+	if [ "$n" = 0 ]; then pass "no speed-test routing rule left (shaper 3.2.2.3)"
+	elif ! flock -n /var/run/qos-ex-autosetup.lock true 2>/dev/null; then info "a speed test is running: $n routing rule(s) for it"
+	else fail "$n speed-test routing rule(s) left (ip -4 rule show: lookup 900)"; fi
 	[ "$(st offload_sw)$(st offload_hw)" = 00 ] && pass "flow offloading off" || fail "flow offloading on (sw=$(st offload_sw) hw=$(st offload_hw))"
 	[ "$(st ct_acct)" = 1 ] && pass "nf_conntrack_acct on" || fail "nf_conntrack_acct=$(st ct_acct)"
 	[ -z "$(st pkg_missing)" ] && pass "no package missing" || fail "packages missing: $(st pkg_missing)"
