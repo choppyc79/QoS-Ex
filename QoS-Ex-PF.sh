@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.0.9.9"
+VERSION="2.1.0.0"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -712,6 +712,11 @@ _pf_lim() {
 	if [ "${PF_BLOCK_MODE:-ping}" = "distance" ]; then _LIM=${PF_PING_CATCH:-0}; else _LIM=${PF_THRESHOLD_MS:-0}; fi
 	_LIM=$((_LIM + _LIM * ${PF_PING_VAR_PCT:-5} / 100))
 }
+# Ping Catch: distance mode with a catch. A server outside the radius is let
+# in on its own ping only (_pf_classify, _pf_fold, _pf_decide, _pf_put).
+_pf_catch_on() {
+	[ "${PF_BLOCK_MODE:-ping}" = "distance" ] && [ "${PF_PING_CATCH:-0}" -gt 0 ] 2>/dev/null
+}
 # The one way an ICMP, handshake or in-play reading changes a row's figure.
 # _pf_fold <old ms> <old src> <old connects> <ms> <src> <connects> [fresh] [ip]
 # -> _F_MS _F_SRC _F_N (a handshake's connects, servers.tsv col 12; 0 for
@@ -722,11 +727,14 @@ _pf_lim() {
 #     a server blocked on it is never timed again), nor while there is no
 #     estimate yet and one can still come ($8 = the server: its location
 #     is still to come, _pf_geo_nofix) and it is not being played (in
-#     session it is taken and the guard keeps it in); with no limit (watch
-#     only, pure distance) only one far over the estimate (over hs_sus_x
-#     times it plus hs_sus_ms) is not -- the first reply of a flow that is
-#     not a handshake (telemetry, a late matchmaking answer) reads seconds.
-#     A second connect lands either;
+#     session it is taken and the guard keeps it in); with Ping Catch one
+#     over the catch from one connect is never taken: the server stays out
+#     of the game (held, or blocked on an estimate over the catch) until a
+#     second connect confirms it or a lower reading lets it in; with no
+#     limit (watch only, pure distance) only one far over the estimate (over
+#     hs_sus_x times it plus hs_sus_ms) is not -- the first reply of a flow
+#     that is not a handshake (telemetry, a late matchmaking answer) reads
+#     seconds. A second connect lands either;
 #   - an own figure (ICMP or handshake): only a LOWER reading is taken, so
 #     one over the limit never replaces one under it; the same handshake low
 #     timed on more connects updates the count;
@@ -763,6 +771,8 @@ _pf_fold() {
 		elif ! { [ "$7" = fresh ] && [ "$s$os" = icmpicmp ]; } && ! [ "$m" -lt "$om" ]; then
 			return 1
 		fi
+	elif [ "$s" = real ] && [ "$n" -lt 2 ] && [ "$_LIM" -gt 0 ] && [ "$m" -gt "$_LIM" ] && _pf_catch_on; then
+		return 1
 	elif [ "$s" = real ] && [ "$n" -lt 2 ] && [ "$om" -gt 0 ] 2>/dev/null \
 	   && { { [ "$_LIM" -gt 0 ] && [ "$m" -gt "$_LIM" ] && [ "$om" -le "$_LIM" ]; } \
 	      || { [ "$_LIM" -eq 0 ] && [ "$m" -gt $((om * ${PF_HS_SUS_X:-2} + ${PF_HS_SUS_MS:-50})) ]; }; }; then
@@ -840,11 +850,14 @@ _pf_reading() {
 # keeps it in, and it ends match_end_wait s after the last one; a server
 # first seen while another server of the same device was at game rate in
 # the last 5 s (a relay or host handoff) is in session from its first
-# packet, and its first verdict is guarded too (_pf_decide). .play-<ip> =
-# the last packet of a server in session. tmpfs: kept over a daemon
-# restart, gone at boot, disable, Clear cache, New game and forget. A change
-# the user makes from the live controls (mode, limit, radius, Ping Catch,
-# presets, Re-check cache) runs with PF_USER_NOW=1 and lands at once.
+# packet, and its first verdict is guarded too (_pf_decide). With Ping
+# Catch neither holds for a server the game was not let through to (held
+# in neither set, _pf_let_in): a new server there gets in on its own ping
+# only, a handoff too. .play-<ip> = the last packet of a server in
+# session. tmpfs: kept over a daemon restart, gone at boot, disable, Clear
+# cache, New game and forget. A change the user makes from the live
+# controls (mode, limit, radius, Ping Catch, presets, Re-check cache) runs
+# with PF_USER_NOW=1 and lands at once.
 _pf_in_session() {
 	local t=""
 	[ -f "$PF_RUN_DIR/.play-$1" ] && read -r t < "$PF_RUN_DIR/.play-$1" 2>/dev/null
@@ -1091,6 +1104,7 @@ _pf_hs_ingest() {
 			_w="far over its estimate (${PF_C_PING}ms)"
 			[ "$_LIM" -gt 0 ] && _w="over the limit, its estimate (${PF_C_PING}ms) under it"
 			[ "$_LIM" -gt 0 ] && ! [ "$PF_C_PING" -gt 0 ] 2>/dev/null && _w="over the limit, no estimate yet (its location is still to come)"
+			_pf_catch_on && _w="over the catch"
 			pf_note "INFO" "ping filter: handshake RTT ${ms}ms for $ip not used yet - one connect $_w; a second connect confirms it"
 		fi
 	done
@@ -1745,14 +1759,16 @@ pf_apply_sets_atomic() {
 
 # Both verdict sets empty while graded rows exist (table rebuilt behind our
 # back, or every entry timed out over a long idle): re-grade the cache. An
-# allow with no figure yet is in neither set by design (the hold).
+# allow with no figure yet is in neither set by design (the hold), and with
+# Ping Catch under the first hold one with no ping of its own (_pf_wait).
 pf_sets_self_heal() {
 	[ -s "$PF_SERVERS_TSV" ] || return 0
-	local a b
+	local a b m=0 _HOLD
 	a=$(pf_allow_ips 2>/dev/null | head -1)
 	b=$(pf_block_ips 2>/dev/null | head -1)
 	{ [ -n "$a" ] || [ -n "$b" ]; } && return 0
-	awk -F'\t' '($2=="allowed"&&$3+0>0)||$2=="blocked"||$2=="whitelist"||$2=="blacklist"{f=1;exit} END{exit f?0:1}' \
+	_pf_catch_on && _pf_hold_on && [ "$_HOLD" = first ] && m=1
+	awk -F'\t' -v m="$m" '($2=="allowed"&&$3+0>0&&(!m||$4=="icmp"||$4=="real"))||$2=="blocked"||$2=="whitelist"||$2=="blacklist"{f=1;exit} END{exit f?0:1}' \
 		"$PF_SERVERS_TSV" 2>/dev/null || return 0
 	msg "ping filter: enforcement sets empty with cached rows present — rebuilding atomically"
 	pf_reclassify
@@ -3913,12 +3929,13 @@ _pf_ir_fill() {
 #     reading at or under the catch allowed; own reading over it blocked,
 #     also while its location is still to come (located inside later, it is
 #     let in); with no reading of its own, its group (_pf_area_verdict)
-#     allows or blocks; not located with a lookup still to come: allowed
-#     until it is; then its estimate decides; no figure: allowed until
-#     graded.
+#     allows or blocks; then an estimate over the catch blocks; else it is
+#     allowed until graded on its own ping (not located with a lookup
+#     still to come, an estimate under the catch, no figure): _CLW=1, it
+#     waits under the hold (_pf_put), out of the game.
 # "Allowed until graded" with no figure waits under the hold (_pf_put).
 _pf_classify() {
-	_CL=""
+	_CL=""; _CLW=0
 	local rtt="$1" lat="$2" lon="$3" src="$4" ip="$5" n="${7:-0}" own=0 cov=0 ir s=""
 	case "$rtt" in (''|*[!0-9-]*) rtt="-1" ;; esac
 	case "$n" in (''|*[!0-9]*) n=0 ;; esac
@@ -3957,6 +3974,8 @@ _pf_classify() {
 			_pf_area_verdict "$ip" "$lat" "$lon"
 			[ -n "$_AV" ] && { _CL=$_AV; return; }
 		fi
+		# No ping of its own: an allow from here waits for one.
+		_CLW=1
 		[ "$ir" = 2 ] && [ -n "$ip" ] && ! _pf_geo_gone "$ip" && { _CL=allowed; return; }
 	else
 		[ "$_LIM" -gt 0 ] || { _CL=allowed; return; }
@@ -3964,7 +3983,7 @@ _pf_classify() {
 	fi
 	# Its figure, own else estimate; none: allowed until graded.
 	if [ "$rtt" -gt 0 ] 2>/dev/null && [ "$rtt" -gt "$_LIM" ]; then
-		_CL=blocked
+		_CL=blocked; _CLW=0
 	else
 		_CL=allowed
 	fi
@@ -3979,25 +3998,30 @@ _pf_classify() {
 #     server is in session, and is blocked after it (_pf_defer); so does a
 #     new row in session (a handoff) where its mode lets a server with no
 #     figure in; a change the user makes from the live controls
-#     (PF_USER_NOW=1) is not kept;
+#     (PF_USER_NOW=1) is not kept; with Ping Catch only a server the game
+#     was let through to is kept (_pf_let_in), a new row never;
 #   - otherwise the figure decides.
 # _pf_decide <ip> <old state> <ping> <src> <lat> <lon> <country> <connects>
-# <keep>: the state into _V. No I/O but the due stamp.
+# <keep>: the state into _V, and _VW = 1 for an allow that waits for the
+# server's own ping (_pf_classify's _CLW, read by _pf_put). No I/O but the
+# due stamp (and _pf_let_in's, with Ping Catch).
 _pf_decide() {
+	_VW=0
 	case "$2" in whitelist|blacklist) _V=$2; return 0 ;; esac
-	_pf_classify "$3" "$5" "$6" "$4" "$1" "$7" "$8"; _V=$_CL
+	_pf_classify "$3" "$5" "$6" "$4" "$1" "$7" "$8"; _V=$_CL; _VW=$_CLW
 	[ "$_V" = blocked ] && [ "$9" = 1 ] && [ "${PF_USER_NOW:-0}" != 1 ] || return 0
 	if [ -z "$2" ]; then
+		_pf_catch_on && return 0
 		_pf_in_session "$1" || return 0
 		_pf_classify -1 "$5" "$6" pending "$1" "$7" 0
 		[ "$_CL" = allowed ] || return 0
-	elif [ "$2" != allowed ]; then return 0; fi
+	elif [ "$2" != allowed ] || { _pf_catch_on && ! _pf_let_in "$1"; }; then return 0; fi
 	_pf_defer "$1" && _V=allowed
 	return 0
 }
-# An allow with no figure yet waits in neither set (_pf_put, reclassify)
-# while a hold rule is in and something can still grade it: its first
-# packets pass (first), or a location may come (full, lookups on).
+# An allow with no figure yet waits in neither set (_pf_wait) while a hold
+# rule is in and something can still grade it: its first packets pass
+# (first), or a location may come (full, lookups on).
 _pf_hold_nofig() {
 	_pf_hold_on && { [ "$_HOLD" = first ] || [ "$PF_GEOIP_LOOKUP" = yes ]; }
 }
@@ -4014,16 +4038,44 @@ _pf_keep_in() {
 	[ "${PF_USER_NOW:-0}" != 1 ] && _pf_in_session "$1" \
 		&& nft get element $PF_FW_TABLE $PF_ALLOWED_SET_NAME "{ $1 }" >/dev/null 2>&1
 }
+# _pf_let_in <ip>: 0 = the game's traffic to it gets through: in
+# @ping_allowed (as this process last put it, else as the kernel says), or
+# in a Ping Catch /24 that lets servers in (.auto24). One held in neither
+# set is not being played: with Ping Catch the session guard keeps only a
+# server let in (_pf_decide).
+_pf_let_in() {
+	local a=""
+	# shellcheck disable=SC2086 # PF_FW_TABLE is "family table"
+	case " $PF_PUTS " in
+		*" $1=a"*) return 0 ;;
+		*" $1=h@"*) ;;
+		*) nft get element $PF_FW_TABLE $PF_ALLOWED_SET_NAME "{ $1 }" >/dev/null 2>&1 && return 0 ;;
+	esac
+	[ -f "$PF_RUN_DIR/.auto24" ] && read -r a < "$PF_RUN_DIR/.auto24" 2>/dev/null
+	case " $a " in *" o:${1%.*}.0/24 "*) return 0 ;; esac
+	return 1
+}
+# _pf_wait <ip> <ping>: 0 = this allow waits in neither set while a hold
+# rule is in and something can still grade it: one with no figure yet
+# (first: its first packets pass and time it; full: a location may come),
+# and under the first hold one with no ping of its own where Ping Catch
+# lets servers in on their own ping only (_VW, _pf_decide). One already in
+# @ping_allowed and being played stays (_pf_keep_in).
+_pf_wait() {
+	if [ "${_VW:-0}" = 1 ] && _pf_hold_on && [ "$_HOLD" = first ]; then :
+	elif ! [ "${2:-0}" -gt 0 ] 2>/dev/null && _pf_hold_nofig; then :
+	else return 1; fi
+	! _pf_keep_in "$1"
+}
 # _pf_put <ip> <state> <src> <ping>: the kernel verdict, when it changed or is
 # a minute old (_pf_put_due). A measured allow gets the long timeout. Pins
-# are put by the list code. An allow with no figure yet is in neither set
-# while it is held (_pf_hold_nofig): its first packets pass, the rest wait
-# to be graded.
+# are put by the list code. An allow that waits (_pf_wait) is in neither
+# set: its first packets pass, the rest wait to be graded.
 _pf_put() {
 	case "$2" in
-		allowed) if _pf_src_measured "$3"; then _pf_put_due "$1" a2 && pf_allow_add "$1" 2
-		         elif ! [ "${4:-0}" -gt 0 ] 2>/dev/null && _pf_hold_nofig && ! _pf_keep_in "$1"; then
+		allowed) if _pf_wait "$1" "$4"; then
 		             _pf_put_due "$1" h && { pf_allow_del "$1"; _pf_put_mark "$1" h; }
+		         elif _pf_src_measured "$3"; then _pf_put_due "$1" a2 && pf_allow_add "$1" 2
 		         else _pf_put_due "$1" a0 && pf_allow_add "$1"; fi ;;
 		blocked) _pf_put_due "$1" b0 && pf_block_add "$1" ;;
 	esac
@@ -4611,12 +4663,13 @@ pf_reclassify_locked() {
 				new_state=$_V
 			fi
 		}
-		# An allow with no figure waits under the hold: in neither set.
+		# An allow that waits under the hold (_pf_wait): in neither set.
 		case "$new_state" in
 			whitelist) printf '%s\t1\n' "$ip" >> "$want_allow" ;;
 			blacklist) printf '%s\t1\n' "$ip" >> "$want_block" ;;
-			allowed)   if _pf_src_measured "$src"; then printf '%s\t2\n' "$ip" >> "$want_allow"
-			           elif [ "$ping" -gt 0 ] 2>/dev/null || ! _pf_hold_nofig || _pf_keep_in "$ip"; then printf '%s\t0\n' "$ip" >> "$want_allow"; fi ;;
+			allowed)   if _pf_wait "$ip" "$ping"; then :
+			           elif _pf_src_measured "$src"; then printf '%s\t2\n' "$ip" >> "$want_allow"
+			           else printf '%s\t0\n' "$ip" >> "$want_allow"; fi ;;
 			blocked)   printf '%s\t0\n' "$ip" >> "$want_block" ;;
 		esac
 		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -5017,10 +5070,11 @@ _pf_trap_cleanup() {
 
 # Matchmaking going nowhere: searching for 45 s and, in the last minute,
 # servers blocked and none allowed (a held one, with no figure yet, counts
-# on neither side). Noted in .stuck ("blocked-count since-epoch"); the
-# dashboard offers a looser limit. Only while blocking.
+# on neither side; with Ping Catch neither does one with no ping of its own
+# that is not in @ping_allowed). Noted in .stuck ("blocked-count
+# since-epoch"); the dashboard offers a looser limit. Only while blocking.
 _pf_stuck_tick() {   # $1 = activity state, $2 = now
-	local f="$PF_RUN_DIR/.stuck" s="$PF_RUN_DIR/.mmsince" t=0 n h=""
+	local f="$PF_RUN_DIR/.stuck" s="$PF_RUN_DIR/.mmsince" t=0 n h="" ain=""
 	if [ "$1" != "matchmaking" ] \
 	   || { [ "$PF_BLOCK_MODE" != "distance" ] && [ "${PF_THRESHOLD_MS:-0}" = "0" ] && [ -z "$PF_COUNTRIES" ]; }; then
 		[ -f "$s" ] && rm -f "$s" "$f" 2>/dev/null
@@ -5031,8 +5085,14 @@ _pf_stuck_tick() {   # $1 = activity state, $2 = now
 	case "$t" in ''|*[!0-9]*) t=$2 ;; esac
 	[ $(($2 - t)) -ge 45 ] && [ $(( ($2 - t) % 10 )) -lt 2 ] || return 0
 	_pf_hold_nofig && h=1
-	n=$(awk -F'\t' -v now="$2" -v h="$h" '
-		now - $9 < 60 { if ($2 == "blocked") b++; else if ($2 == "whitelist" || ($2 == "allowed" && ($3 + 0 > 0 || h == ""))) a++ }
+	_pf_catch_on && [ "$_HOLD" = first ] && ain=" $(pf_allow_ips 2>/dev/null | tr '\n' ' ')"
+	n=$(awk -F'\t' -v now="$2" -v h="$h" -v ain="$ain" '
+		now - $9 < 60 {
+			if ($2 == "blocked") b++
+			else if ($2 == "whitelist") a++
+			else if ($2 == "allowed" && ain == "") { if ($3 + 0 > 0 || h == "") a++ }
+			else if ($2 == "allowed" && ($4 == "icmp" || $4 == "real" || index(ain, " " $1 " "))) a++
+		}
 		END { print (a + 0 == 0) ? b + 0 : 0 }' "$PF_SERVERS_TSV" 2>/dev/null)
 	if [ "${n:-0}" -ge 3 ] 2>/dev/null; then
 		echo "$n $t" > "$f" 2>/dev/null
@@ -6198,7 +6258,11 @@ pf_servers_json() {
 	case "$hr_q" in (''|*[!0-9.]*) hr_q="1000" ;; esac
 	local bm_q="${PF_BLOCK_MODE:-ping}"
 
-	local allow_pairs block_pairs
+	# Held: an allowed row in neither set while the hold is in waits to be
+	# graded (_pf_wait), unless a Ping Catch /24 lets it in (.auto24).
+	local allow_pairs block_pairs hold="" a24="" _HOLD
+	_pf_hold_on && hold=1
+	[ -f "$PF_RUN_DIR/.auto24" ] && read -r a24 < "$PF_RUN_DIR/.auto24" 2>/dev/null
 	allow_pairs=$(pf_allow_dump 2>/dev/null; pf_allow_dump6 2>/dev/null)   # "ip<TAB>expiry_sec"
 	block_pairs=$(pf_block_dump 2>/dev/null; pf_block_dump6 2>/dev/null)
 
@@ -6260,7 +6324,8 @@ pf_servers_json() {
 	    -v geo_file="$PF_GEO_CACHE" \
 	    -v live_file="$PF_LIVE_TSV" \
 	    -v hist_file="$PF_TELE_HIST" -v owner_file="$PF_OWNER_TSV" -v pfx_file="$PF_PREFIX_TSV" \
-	    -v pfx_ttl="${PF_PREFIX_TTL:-0}" -v pstart="$ps" -v mkeep="${PF_MAP_KEEP:-3600}" -v jmax="${PF_JSON_MAX:-800}" '
+	    -v pfx_ttl="${PF_PREFIX_TTL:-0}" -v pstart="$ps" -v mkeep="${PF_MAP_KEEP:-3600}" -v jmax="${PF_JSON_MAX:-800}" \
+	    -v hold="$hold" -v a24="$a24" '
 	# Escapes by concatenation, never a gsub replacement string (BusyBox
 	# 1.38 awk drops the backslash of "\\\"" there -> invalid JSON).
 	function jesc(s,    o, i, c) {
@@ -6319,6 +6384,9 @@ pf_servers_json() {
 			}
 			close(pfx_file)
 		}
+		# The Ping Catch /24s that let servers in: "o:a.b.c.0/24".
+		na = split(a24, AA, / +/)
+		for (i = 1; i <= na; i++) if (AA[i] ~ /^o:/) OK24[substr(AA[i], 3, length(AA[i]) - 7)] = 1
 		printf "{\"servers\":["
 		first = 0
 	}
@@ -6379,6 +6447,12 @@ pf_servers_json() {
 		if (is_cached == "true" && ts > 0 && (now - ts) < 30 && tsv_state != "") {
 			is_cached = "false"
 			state = tsv_state
+			# Allowed in neither set while the hold is in: it waits to be
+			# graded, out of the game, unless its /24 is let in.
+			if (state == "allowed" && hold != "" && ip !~ /:/) {
+				p24 = ip; sub(/\.[0-9]+$/, "", p24)
+				if (!(p24 in OK24)) state = "held"
+			}
 		}
 
 		# 2.0.4.2: a measured allow stays in the kernel for row_ttl; one not
@@ -6798,13 +6872,18 @@ Distance mode
   ping_catch_ms > 0: the radius lets servers in, the catch adds those
   outside it at or under ping_catch_ms. A server inside the radius is
   allowed whatever its ping (block a bad one by hand). Outside it, or not
-  located yet: its own reading at or under the catch allows it, over it
-  blocks it (once located inside the radius, it is allowed). A server with
-  no reading of its own goes with its group ($PF_AREA_KM km, or its /24):
-  more under the catch than confirmed over, with one in its /24 or
-  auto_pin in the area, allows it (an echo over the catch counts on
-  neither side); auto_pin confirmed over and none under blocks it. Not
-  located yet: allowed until it is. New servers wait as in ping mode.
+  located yet, only its own reading lets it in: at or under the catch it
+  is allowed, over it blocked (once located inside the radius, it is
+  allowed). A server with no reading of its own goes with its group
+  ($PF_AREA_KM km, or its /24): more under the catch than confirmed over,
+  with one in its /24 or auto_pin in the area, allows it (an echo over the
+  catch counts on neither side); auto_pin confirmed over and none under
+  blocks it. Else an estimate over the catch blocks it, and otherwise it
+  waits out of the game (held) until its own ping: the first first_pkts
+  packets of each flow pass, so the game's handshake times it. A handshake
+  over the catch on one connect keeps it waiting; on a second connect it
+  blocks it. With a country list (every new server held) it is let in on
+  its estimate: nothing could time it there.
 
 Either mode
   allow_country: when set, a server in any other country is blocked, and
@@ -6816,11 +6895,13 @@ Either mode
   waits until $PF_MATCH_END_WAIT seconds after its last packet. In session:
   its packets reached game rate (a flow it opened through a port forward
   counts), or it is new while another server of the same device was at
-  game rate in the last 5 s (a handoff: its first verdict waits too).
-  ignore_ports never count. A change from the live controls (mode, limit,
-  radius, catch, profile, Re-check cache) lands at once. With telemetry, a
-  server is graded on its play: at the end of a stretch with enough
-  in-play readings its median becomes its figure. A stop or restart
+  game rate in the last 5 s (a handoff: its first verdict waits too). With
+  Ping Catch only a server the game was let through to is kept, and a new
+  one (a handoff too) gets in on its own ping only. ignore_ports never
+  count. A change from the live controls (mode, limit, radius, catch,
+  profile, Re-check cache) lands at once. With telemetry, a server is
+  graded on its play: at the end of a stretch with enough in-play
+  readings its median becomes its figure. A stop or restart
   mid-match grades nothing.
 
 Config: /etc/config/qos-ex -> config pingfilter 'pingfilter'
