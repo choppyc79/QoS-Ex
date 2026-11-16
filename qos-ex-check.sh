@@ -418,6 +418,14 @@ pingfilter() {
 				*) fail "Ping Catch: let in outside the radius on no ping of its own: $(printf '%s' "$x" | cut -c1-300)" ;;
 			esac
 		fi
+		# 2.1.0.1: a measured server takes the location the cache holds during
+		# play too (two a pass), so the servers near it can use its ping.
+		n=$(awk -F'\t' -v gf="$PFR/geo-cache.tsv" '
+			FILENAME == gf { if ($2 + 0 != 0 && $3 + 0 != 0) G[$1] = 1; next }
+			($4 == "icmp" || $4 == "real") && ($5 + 0 == 0 || $6 + 0 == 0) && ($1 in G) { n++ }
+			END { print n + 0 }' "$PFR/geo-cache.tsv" "$PFR/servers.tsv" 2>/dev/null)
+		if [ "${n:-0}" = 0 ]; then pass "measured servers carry the location the cache holds (2.1.0.1)"
+		else info "$n measured server(s) still to take the location the cache holds (two a pass)"; fi
 	else
 		info "Ping Filter off"
 	fi
