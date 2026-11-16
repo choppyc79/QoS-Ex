@@ -5,7 +5,19 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.3 · Ping Filter 2.0.9.9 · shaper 3.2.2.1**
+Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.0 · shaper 3.2.2.1**
+
+## LuCI app 1.4.0.4
+
+- Added: **held** on the Servers page and the Dashboard (amber, as on the Map): a server Ping Catch keeps out of the game until its own ping is graded. It read **allowed** before.
+- Changed: the **catch** tag marks only a server Ping Catch let in on its own ping, not one on an estimate.
+
+## Ping Filter 2.1.0.0
+
+- Fixed: with Ping Catch, a server outside the radius with no ping of its own was let in on an estimate under the catch. The estimate is scaled by how your other servers compare with their distance, so a far server could come out under the catch: a server in Mumbai, about 7,000 km away, was played for a whole match at 178 ms with a 100 ms catch. Such a server now waits out of the game until its own ping is graded: its first two packets pass, the game's first exchange is timed, and it is let in only at or under the catch. An estimate over the catch still keeps it out at once.
+- Fixed: with Ping Catch, the game's first exchange over the catch on one connect no longer leaves the server playing on its estimate until a second connect. The server stays out of the game until a second connect confirms the reading (then it is blocked) or a lower one lets it in.
+- Changed: with Ping Catch, a server reached while another server of the same device is in play is judged on its own ping like any new server, and a server is kept for the match only if the game was let through to it. Before, such a server was let in on trust for that match.
+- Not changed: inside the radius every server is let in; a server's own ping at or under the catch lets it in; the /24 group; a server let in and played is still kept until the game on it ends; ping mode and the radius alone work as before. With a country list, a server with no ping of its own is still let in on its estimate: every new server is held there, so nothing could time it.
 
 ## LuCI app 1.4.0.3
 
