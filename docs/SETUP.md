@@ -33,9 +33,10 @@ Turn off anything that conflicts:
    WAN, **Save & Apply**.
 2. **Any other shaper** on the WAN (qosify, a script of your own). QoS-Ex
    reports a queue it did not build and leaves it alone.
-3. **mwan3** and **pbr** keep their choices in the conntrack mark, which
-   QoS-Ex writes. They do not work properly while QoS-Ex shapes; QoS-Ex
-   warns when either is enabled.
+3. **mwan3** with a changed `mmx_mask` that overlaps the bits of the
+   conntrack mark QoS-Ex uses (`0xFF0000BF`); QoS-Ex warns then. Its
+   default, `0x3F00`, is fine, and so is pbr. With two lines, QoS-Ex shapes
+   one (the WAN in Setup): send the gaming devices out through that line.
 
 ---
 
@@ -430,7 +431,7 @@ The Ping Filter's `pingfilter` section is in
 | Option | Default | Meaning |
 |---|---|---|
 | `enabled` | `0` | Master switch |
-| `wan` | the default-route device, else `eth0` | WAN device: the one `ip route get 1.1.1.1` names (`pppoe-wan`, not the port under it). A switch's CPU port (DSA conduit) is refused |
+| `wan` | the default-route device (with two lines, the one with the lower metric), else `eth0` | WAN device: the one `ip route get 1.1.1.1` names (`pppoe-wan`, not the port under it). A switch's CPU port (DSA conduit) is refused |
 | `download_kbps` / `upload_kbps` | `100000` | Line speed in kbit/s, as measured. `0` = do not shape that direction |
 | `bw_headroom` | `90` | Shaped rate as a % of line speed, 50–100 (`100` = off); out of range = 90. With `hfsc` or `htb` keep it at 90 or lower: they charge a burst of merged packets (GRO) as one, 3–5% under the wire for bulk TCP |
 | `qdisc` | `cake` | `cake`, `hfsc` or `htb` |
