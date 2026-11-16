@@ -15,7 +15,7 @@
 #     ifb       stop, rmmod ifb, start                       shaping off ~10 s
 #     branch    update_branch unset, then put back           a settings change, undone
 #     redial    ifup wan                                     the internet drops a few seconds
-#     rules     Adaptive for a moment, then back             a settings change, undone (two reloads)
+#     rules     each other rule set in turn, then back       a settings change, undone (three reloads)
 #     queue     HTB for a moment, then back                  a settings change, undone; shaping off ~10 s twice
 #     update    two Update now at once                       runs the updater: installs what changed, if anything
 #     debug     the sanitized debug report at the end        read-only
@@ -116,6 +116,13 @@ shaper() {
 		0) fail "WAN mismatch: set to $(st wan), the line is on $(st wan_live)" ;;
 		*) info "wan_match=$(st wan_match)" ;;
 	esac
+	# Shaper 3.2.2.2: the line in use is the lowest-metric default route.
+	ip -4 route show default > "$T/routes" 2>/dev/null
+	n=$(grep -c '^default' "$T/routes")
+	[ "$n" -gt 1 ] && { info "$n IPv4 default routes (more than one line):"; ind < "$T/routes"; }
+	w=$(awk '$1 == "default" { d = ""; m = 0; for (i = 2; i < NF; i++) { if ($i == "dev") d = $(i + 1); else if ($i == "metric") m = $(i + 1) + 0 }
+		if (d != "" && (b == "" || m < bm)) { b = d; bm = m } } END { print b }' "$T/routes")
+	[ -z "$w" ] || { [ "$(st wan_live)" = "$w" ] && pass "wan_live $w: the lowest-metric default route (shaper 3.2.2.2)" || fail "wan_live=$(st wan_live), the lowest-metric default route is on $w"; }
 	[ "$(st offload_sw)$(st offload_hw)" = 00 ] && pass "flow offloading off" || fail "flow offloading on (sw=$(st offload_sw) hw=$(st offload_hw))"
 	[ "$(st ct_acct)" = 1 ] && pass "nf_conntrack_acct on" || fail "nf_conntrack_acct=$(st ct_acct)"
 	[ -z "$(st pkg_missing)" ] && pass "no package missing" || fail "packages missing: $(st pkg_missing)"
@@ -253,9 +260,42 @@ ef_fixes() {
 	r=$(nft list chain inet qos_ex_adaptive guard 2>/dev/null | grep '@guard_bytes')
 	[ -n "$r" ] && pass "Adaptive gaming guard meters bytes too" || fail "Adaptive guard without @guard_bytes"
 	printf '%s\n' "$r" | sed 's/^[[:space:]]*//' | ind
-	mk=$(nft list chain inet qos_ex_adaptive s_call 2>/dev/null | sed -n 's/.*ct mark set \(0x[0-9a-f]*\).*/\1/p' | head -n 1)
+	# The last 0x... of the write is its value (from 3.2.2.2 nft lists `ct mark
+	# set ct mark & <keep> | <value>`); the DSCP is in its last two digits.
+	mk=$(nft list chain inet qos_ex_adaptive s_call 2>/dev/null | sed -n 's/.*ct mark set .*\(0x[0-9a-f]*\).*/\1/p' | head -n 1)
 	w=32 nm=CS4; [ "$QD" = cake ] && w=34 nm=AF41
-	[ -n "$mk" ] && [ $((mk & 63)) = "$w" ] && pass "video-call UDP $nm under $QD" || fail "video-call UDP mark ${mk:-none} (want DSCP $w, $nm)"
+	[ -n "$mk" ] && [ $((0x${mk#"${mk%??}"} & 63)) = "$w" ] && pass "video-call UDP $nm under $QD" || fail "video-call UDP mark ${mk:-none} (want DSCP $w, $nm)"
+}
+
+# Shaper 3.2.2.2: every conntrack-mark write keeps the bits QoS-Ex does not
+# own (0x00ffff40: mwan3's line, other tools' bits); Adaptive's flags and
+# generation sit in the top byte. nft lists a write folded, as
+# `ct mark set ct mark & 0x00ffffee | 0x000000ae`.
+ctmark() {
+	sec "Conntrack mark (shaper 3.2.2.2)"
+	tb=$(nft list tables 2>/dev/null | grep -oE 'qos_ex_(simple|advanced|adaptive)$' | head -n 1)
+	[ -n "$tb" ] || { info "no shaper table"; return; }
+	nft list table inet "$tb" > "$T/ctm" 2>/dev/null
+	n=$(grep -cE 'ct mark set (0x|[0-9]|ip6? dscp map)' "$T/ctm")
+	[ "$n" = 0 ] && pass "$tb: no write of the whole conntrack mark" || { fail "$tb: $n write(s) of the whole conntrack mark"; grep -E 'ct mark set (0x|[0-9]|ip6? dscp map)' "$T/ctm" | head -n 3 | sed 's/^[[:space:]]*//' | ind; }
+	n=$(grep -c 'ct mark set ct mark & 0x' "$T/ctm")
+	b=$(grep -o 'ct mark set ct mark & 0x[0-9a-f]*' "$T/ctm" | awk '{ h = substr($NF, 3); if (length(h) != 8 || substr(h, 3, 4) != "ffff") b++ } END { print b + 0 }')
+	[ "$n" -gt 0 ] && [ "$b" = 0 ] && pass "$tb: all $n conntrack-mark writes keep bits 0x00ffff00" || fail "$tb: $b of $n conntrack-mark writes clear bits 0x00ffff00"
+	if [ "$tb" = qos_ex_adaptive ]; then
+		grep -qE 'ct mark & 0xf0000080 != 0x[0-9a-f]0000080 jump decide' "$T/ctm" && pass "Adaptive: generation and flags in the top byte" || fail "Adaptive: no top-byte generation test in its forward chain"
+	else
+		n=$(nft list chain inet "$tb" classify 2>/dev/null | grep -o 'goto cm_' | wc -l)
+		[ "$n" = 128 ] && pass "$tb: classify writes through the cm_ chains (64 codepoints, IPv4 and IPv6)" || fail "$tb: classify reaches the cm_ chains for $n codepoints (want 128)"
+	fi
+	if ls /etc/rc.d/S*mwan3 >/dev/null 2>&1; then
+		info "mwan3 enabled, mmx_mask $(uci -q get mwan3.globals.mmx_mask || echo '0x3F00 (default)')"
+		[ -z "$(st ct_mark_users)" ] && pass "mwan3's mmx_mask is clear of QoS-Ex's bits (0xff0000bf)" || fail "mwan3's mmx_mask overlaps QoS-Ex's bits (ct_mark_users=$(st ct_mark_users))"
+	fi
+	# Connections marked before the update keep the old bits until they close.
+	if command -v conntrack >/dev/null 2>&1; then
+		n=$(conntrack -L 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^mark=/) { m = substr($i, 6) + 0; if (int(m / 256) % 256) o++ } } END { print o + 0 }')
+		info "connections with mark bits 0x0000ff00 set: $n (3.2.2.2 sets none: mwan3's line, or marks from before the update)"
+	fi
 }
 
 hook() {
@@ -538,14 +578,16 @@ test_update() {
 
 # Adaptive for a moment (for a router on another rule set), then the rule set back.
 test_rules() {
-	sec "TEST rules: Adaptive for a moment, then back"
+	sec "TEST rules: each other rule set in turn, then back"
 	rm0=$(st nft_mode) ro=$(uci -q get qos-ex.settings.nft_mode)
-	[ "$rm0" = adaptive ] && { info "already Adaptive: the sections above cover it"; return; }
-	uci set qos-ex.settings.nft_mode=adaptive; uci commit qos-ex
-	svc reload >/dev/null 2>&1; sleep 2
-	"$Q" status > "$T/status" 2>&1
-	[ "$(st nft_mode)" = adaptive ] && [ "$(shaper_tables)" = 1 ] && pass "Adaptive loaded, one shaper table" || fail "nft_mode=$(st nft_mode), $(shaper_tables) shaper table(s)"
-	dscp_restore; ef_fixes
+	for m in simple advanced adaptive; do
+		[ "$m" = "$rm0" ] && continue
+		uci set qos-ex.settings.nft_mode=$m; uci commit qos-ex
+		svc reload >/dev/null 2>&1; sleep 2
+		"$Q" status > "$T/status" 2>&1
+		[ "$(st nft_mode)" = $m ] && [ "$(shaper_tables)" = 1 ] && pass "$m loaded, one shaper table" || fail "nft_mode=$(st nft_mode), $(shaper_tables) shaper table(s)"
+		dscp_restore; ef_fixes; ctmark
+	done
 	if [ -n "$ro" ]; then uci set qos-ex.settings.nft_mode="$ro"; else uci -q delete qos-ex.settings.nft_mode; fi
 	uci commit qos-ex; svc reload >/dev/null 2>&1; sleep 2
 	"$Q" status > "$T/status" 2>&1
@@ -596,7 +638,7 @@ test_redial() {
 
 main() {
 	echo "QoS-Ex check $(date '+%Y-%m-%d %H:%M:%S'), script #$(sha256sum "$0" 2>/dev/null | cut -c1-10), arguments: ${*:-none}"
-	versions; shaper; nftables; queues; dscp_restore; ef_fixes; hook; counters; app_calls; gameflows; pingfilter; logs
+	versions; shaper; nftables; queues; dscp_restore; ef_fixes; ctmark; hook; counters; app_calls; gameflows; pingfilter; logs
 	for a in "$@"; do
 		case "$a" in
 			match) match ;;
