@@ -5,7 +5,12 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.0 · shaper 3.2.2.2**
+Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.1 · shaper 3.2.2.2**
+
+## Ping Filter 2.1.0.1
+
+- Fixed: a measured server seen only for a moment during play (a matchmaking probe) got its location only when it was next seen, or after 10 minutes without gaming, and until then its ping was not used for the servers near it. Locations the Ping Filter already knows now reach those servers during play too (two a pass, measured servers first), and a re-grade fills in every known location before it grades anything.
+- Changed: a server with no ping of its own is estimated from measured servers first: the lowest in its /24, then the median of those within 150 km from one server up (it took three), with ICMP and the game's exchange counting alike (ICMP readings came first). Earlier readings in its /24 come after them, then the distance.
 
 ## LuCI app 1.4.0.4
 
