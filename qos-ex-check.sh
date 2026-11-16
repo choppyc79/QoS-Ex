@@ -433,6 +433,30 @@ pingfilter() {
 				done 3< "$PF_SERVERS_TSV" 2>/dev/null)
 			[ -z "$x" ] && pass "Ping Catch: no server outside the radius let in with its own ping over the catch (2.0.9.8)" \
 				|| fail "Ping Catch: let in outside the radius with its own ping over the catch: $(printf '%s' "$x" | cut -c1-300)"
+			# Ping Catch (2.1.0.0): outside the radius a server gets in on its own
+			# ping only. One with none waits in neither set (held), unless its /24
+			# group lets it in or it was being played from before.
+			# shellcheck disable=SC1091,SC2034,SC2317 # the Ping Filter's code reads them
+			x=$(. "$T/pf.lib"
+				RUN_LOG=""; _pf_warn_once() { :; }; _pf_warn_clear() { :; }
+				pf_load_config; PF_NOW=$(date +%s); _pf_lim; _pf_ir_fill "$PF_SERVERS_TSV"
+				if ! { _pf_hold_on && [ "$_HOLD" = first ]; }; then echo SKIP; exit 0; fi
+				A=" $(pf_allow_ips 2>/dev/null | tr '\n' ' ') "
+				while IFS= read -r row <&3; do
+					_pf_row "$row"
+					[ "$PF_C_STATE" = allowed ] || continue
+					_pf_src_measured "$PF_C_SRC" && [ "$PF_C_PING" -gt 0 ] 2>/dev/null && continue
+					case "$A" in *" $PF_C_IP "*) ;; *) continue ;; esac
+					_pf_in_radius "$PF_C_IP" "$PF_C_LAT" "$PF_C_LON" && continue
+					_pf_in_session "$PF_C_IP" && continue
+					_pf_area_verdict "$PF_C_IP" "$PF_C_LAT" "$PF_C_LON"; [ "$_AV" = allowed ] && continue
+					printf '%s ~%sms %s; ' "$PF_C_IP" "$PF_C_PING" "$PF_C_SRC"
+				done 3< "$PF_SERVERS_TSV" 2>/dev/null)
+			case "$x" in
+				SKIP) info "Ping Catch with a country list or first_pkts 0: a server with no ping of its own is let in on its estimate" ;;
+				'') pass "Ping Catch: no server outside the radius let in on no ping of its own (2.1.0.0)" ;;
+				*) fail "Ping Catch: let in outside the radius on no ping of its own: $(printf '%s' "$x" | cut -c1-300)" ;;
+			esac
 		fi
 	else
 		info "Ping Filter off"
