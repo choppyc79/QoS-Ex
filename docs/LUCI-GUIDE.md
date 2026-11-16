@@ -131,8 +131,10 @@ changed in the `autosetup` section
 
 The speed test downloads and uploads from Cloudflare's speed servers for
 about 30 seconds (up to 1500 MB each way). Shaping and the Ping Filter are
-paused while it runs. It then shows each speed against the WAN port's, and
-what held it back:
+paused while it runs. With two internet lines it goes out through the WAN
+set in **Setup** (the line QoS-Ex shapes), even when the router's own
+traffic normally takes the other line. It then shows each speed against
+the WAN port's, and what held it back:
 
 - **the line**: the result is your line speed;
 - **the WAN port**: the result is the port's top speed, and the line may be
