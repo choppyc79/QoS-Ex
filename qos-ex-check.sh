@@ -475,6 +475,25 @@ pingfilter() {
 			END { print n + 0 }' "$PFR/geo-cache.tsv" "$PFR/servers.tsv" 2>/dev/null)
 		if [ "${n:-0}" = 0 ]; then pass "measured servers carry the location the cache holds (2.1.0.1)"
 		else info "$n measured server(s) still to take the location the cache holds (two a pass)"; fi
+		# 2.1.0.2: handshakes are timed from conntrack events, which another
+		# kernel module can take (full-cone NAT built without shared events,
+		# after a firewall stop or restart). A 3 s listen while the router looks
+		# up a name no cache holds: the events reach a listener, or none.
+		if [ "$(pfk hs_rtt)" = 1 ]; then
+			conntrack -E -p udp -e NEW -o timestamp > "$T/ctev" 2>&1 & c=$!
+			sleep 1; nslookup "qos-ex-check-$$.openwrt.org" >/dev/null 2>&1; sleep 2
+			kill "$c" 2>/dev/null; wait "$c" 2>/dev/null
+			n=$(grep -c '^\[' "$T/ctev")
+			[ "$n" -gt 0 ] && pass "conntrack events reach listeners: $n new UDP flow(s) in 3 s (2.1.0.2)" \
+				|| fail "no conntrack events reach listeners in 3 s: handshakes are not timed (a kernel module, full-cone NAT for example, holds them: rmmod nf_conntrack_netlink && modprobe nf_conntrack_netlink)"
+			case "$(pfk hs_quiet)" in
+				0) pass "the Ping Filter has not found its handshake listener quiet (hs_quiet=0, 2.1.0.2)" ;;
+				1) fail "the Ping Filter says its handshake listener hears nothing (hs_quiet=1, 2.1.0.2)" ;;
+				*) info "hs_quiet not reported (a Ping Filter older than 2.1.0.2)" ;;
+			esac
+		else
+			info "handshake timing off (hs_rtt=$(pfk hs_rtt): Lite, or no conntrack tool)"
+		fi
 	else
 		info "Ping Filter off"
 	fi
