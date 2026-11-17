@@ -373,7 +373,7 @@ time and when you last played on it. Click one for the detail:
 | C | 60 to 69 |
 | D | under 60 |
 
-Two warnings can appear:
+These warnings can appear:
 
 - A watched device has a public IPv6 address. The Ping Filter checks IPv4
   servers only, so a game that connects over IPv6 is not filtered.
@@ -381,6 +381,10 @@ Two warnings can appear:
   starts. Its button loosens the filter one step: the ping limit 10 ms
   higher, Ping Catch 10 ms higher (up to 250), or, without Ping Catch, the
   radius a quarter wider.
+- **Handshake timing gets no conntrack events**: the router's kernel no
+  longer reports new connections to the Ping Filter, so a server that
+  ignores ping is not measured and keeps its estimate (~). Its link opens
+  the Ping Filter log, which says how to bring the events back.
 
 ### Map
 
