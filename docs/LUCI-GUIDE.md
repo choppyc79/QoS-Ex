@@ -151,12 +151,14 @@ again through the queue QoS-Ex would build (the IFB and the queue at the
 shaped rate, with your settings): CAKE first, then HFSC, then HTB, a few
 seconds each, until one keeps up. A queue keeps up when no CPU core reaches
 80% packet work (softirq, `fit_sirq_pct`) and the kernel drops nothing
-before it. A line under the gauges says what each queue did, with the
+before it. If under half that rate arrives with no core busy, nothing was
+measured: the check stops there and step ③ says so. A line under the
+gauges says what each queue did, with the
 busiest core and the ping under load through it. Step ③ suggests the first
 one that kept up, whatever the router's rating; when none does, HTB, with
 the speeds cut to what HTB shaped. Speeds typed in later are judged from
 the same figures. With no check (speeds typed with no speed test in the
-last hour, or a check that could not run), the queue follows the rating
+last hour, or a check that could not run or measure), the queue follows the rating
 below, one step lighter after a test the CPU held back (CAKE → HFSC, HFSC →
 HTB).
 
@@ -176,7 +178,8 @@ what QoS-Ex is there to remove.
 Cloudflare limits how many tests one address can run in a short time. If
 the test cannot run (it answers HTTP 429), the reason is shown here: type
 your line's speeds in Mbit and press **Use these speeds**, or try again
-later.
+later. The same goes for a test whose download carries almost nothing
+(under a fiftieth of the upload).
 
 ### ② Devices
 
