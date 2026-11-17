@@ -743,16 +743,18 @@ test_speedtest() {
 	for k in down up; do
 		case " $seen " in *" $k "*) pass "the page is told the $k phase (shaper 3.2.2.4)" ;; *) fail "no $k phase in the state file" ;; esac
 	done
-	info "$(grep -E '^(down_kbps|up_kbps|cpu_down|sirq_down|sirqmax_down|drops_down|cpu_up|sirqmax_up|drops_up|limit_down|limit_up|bound|fail_down|fail_up|src_down|src_up|ls_server)=' "$R" | tr '\n' ' ')"
+	info "$(grep -E '^(down_kbps|up_kbps|cpu_down|sirq_down|sirqmax_down|drops_down|cpu_up|sirqmax_up|drops_up|limit_down|limit_up|bound|fail_down|fail_up|fails_down|fails_up|src_down|src_up|ls_server)=' "$R" | tr '\n' ' ')"
 	if grep -q '^fail_down=' "$R"; then pass "the result keeps each direction's last fetch error (shaper 3.2.2.6)"
 	else fail "no fail_down= in the result (shaper 3.2.2.6 keeps it)"; fi
+	if grep -q '^fails_down=' "$R"; then pass "the result counts each direction's failed fetches (shaper 3.2.2.8)"
+	else fail "no fails_down= in the result (shaper 3.2.2.8 keeps it)"; fi
 	if [ "$(uci -q get qos-ex.autosetup.fit_check)" = 0 ]; then
 		info "the queue check is off (autosetup.fit_check 0)"
 	elif grep -qE '^fit_(cake|hfsc|htb)=(pass|fail),' "$R"; then
 		pass "queue check: $(grep -E '^fit_(rate|cake|hfsc|htb)=' "$R" | tr '\n' ' ')"
 		case " $seen " in *" fit:"*) pass "the page is told which queue is being checked" ;; *) fail "no fit phase in the state file" ;; esac
 	elif grep -qE '^fit_(cake|hfsc|htb)=nodata,' "$R"; then
-		info "queue check could not measure (under half its rate arrived, shaper 3.2.2.6): $(grep -E '^fit_(rate|cake|hfsc|htb)=' "$R" | tr '\n' ' ')"
+		info "queue check could not measure (its fetches kept failing, or under half its rate arrived): $(grep -E '^fit_(rate|cake|hfsc|htb)=' "$R" | tr '\n' ' ')"
 	else
 		fail "no queue checked: $(grep -E '^fit_' "$R" | tr '\n' ' ')"
 	fi
