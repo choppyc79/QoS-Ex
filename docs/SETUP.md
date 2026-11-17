@@ -98,7 +98,9 @@ on the **Set up QoS-Ex** card. Pick one:
    20 s more). If the test cannot run, type your line speeds and press
    **Use these speeds**.
    Cloudflare limits how many tests one address may run: after a few in a
-   row it answers HTTP 429, so type your speeds or try again later.
+   row it answers HTTP 429, so type your speeds or try again later. A test
+   whose download carries almost nothing (under a fiftieth of the upload)
+   gives no result either: try again in a few minutes.
 2. Once the line speed is known, go on to **② Devices**. Set your consoles
    and gaming PCs to **Gaming** and anything that downloads a lot (a NAS, a
    TV box) to **Low priority**. Consoles are set to Gaming for you from
@@ -170,7 +172,8 @@ Add 4 for a VLAN tag (not on ADSL).
 | **HTB** | You want the same six classes on the least CPU. Auto Setup's pick when neither CAKE nor HFSC keeps up. |
 
 Auto Setup's queue check runs with its speed test. Without one (no speed test
-in the last hour, or a check that could not run), it picks by the router's rating:
+in the last hour, or a check that could not run or measured nothing because
+too little arrived), it picks by the router's rating:
 CAKE on a high-end router (HFSC when the router is not x86 and the line is
 faster than 500 Mbit), HFSC on a mid-range one, HTB with sfq queues on a
 low-spec one.
