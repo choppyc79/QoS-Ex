@@ -5,7 +5,13 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.5**
+Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.6**
+
+## Shaper 3.2.2.6
+
+- Fixed: Auto Setup's queue check counted a queue as keeping up at the line's speed when its download had carried almost nothing (0.2 Mbit while CAKE ran at 836 Mbit), so Auto Setup could suggest CAKE without having measured it. A check whose download carries under half the rate it runs at, with no CPU core busy, now measures nothing: the check stops there, the router's rating picks the queue, and step ③ says the check could not measure it. A queue whose download carried less than the speed needed is now judged by scaling up what it carried, as typed speeds already were, instead of being taken as keeping up.
+- Fixed: a speed test whose download carried almost nothing (0.1 Mbit beside a 734 Mbit upload) gave that as the line's download speed. A download under a fiftieth of the upload is no result now: the test says to try again in a few minutes, or to type the line's speeds.
+- Added: the speed test keeps the last error of its download and of its upload in its result (`fail_down`, `fail_up`), says in the log when one failed, and **Copy for forum** carries both.
 
 ## LuCI app 1.4.0.7
 
