@@ -1617,7 +1617,8 @@ _as_save() {
 		"cpu_down=$AS_CD" "sirq_down=$AS_SD" "sirqmax_down=$AS_MD" "drops_down=$AS_RD" \
 		"cpu_up=$AS_CU" "sirq_up=$AS_SU" "sirqmax_up=$AS_MU" "drops_up=$AS_RU" \
 		"limit_down=$AS_LD" "limit_up=$AS_LU" "fit_rate=$AS_FR" "fit_now=$AS_FN" \
-		"fail_down=$AS_FD" "fail_up=$AS_FU" "src_down=$AS_SDN" "src_up=$AS_SUP" "ls_server=$AS_LSN" \
+		"fail_down=$AS_FD" "fail_up=$AS_FU" "fails_down=${AS_FCD:-0}" "fails_up=${AS_FCU:-0}" \
+		"src_down=$AS_SDN" "src_up=$AS_SUP" "ls_server=$AS_LSN" \
 		"fit_cake=$AS_FCAKE" "fit_hfsc=$AS_FHFSC" "fit_htb=$AS_FHTB" "streams=$AS_STREAMS" "secs=$AS_SECS" \
 		"wan=$AS_WAN" "bound=${AS_BOUND:-0}" "msg=$AS_MSG" "at=$(($(_as_up100) / 100))" > "$AS_RUN.tmp" 2>/dev/null &&
 		mv -f "$AS_RUN.tmp" "$AS_RUN"
@@ -1627,19 +1628,23 @@ _as_save() {
 # so the end can stop a transfer in flight. uclient-fetch holds a whole POST
 # body in RAM, so uploads repeat a small file.
 _as_stream() {   # $1 = stop file, $2 = PID file, $3.. = uclient-fetch arguments
-	local _s="$1" _p="$2"
+	local _s="$1" _p="$2" _l _r _e
+	_l="${_s%/*}/log.${_p##*.}"
 	shift 2
 	while [ ! -e "$_s" ]; do
 		# Not -q: it hides why a fetch failed (HTTP error, connection).
-		uclient-fetch -O /dev/null "$@" </dev/null >/dev/null 2>"${_s%/*}/log.${_p##*.}" &
+		uclient-fetch -O /dev/null "$@" </dev/null >/dev/null 2>"$_l" &
 		echo "$!" > "$_p"
-		# A failed fetch (no route, refused) must not spin; its reason is
-		# kept for the result. A fetch stopped at the end is not a failure.
-		if ! wait "$!"; then
-			[ -e "$_s" ] || grep -E 'error|failed|Failed|refused|reset|timed out|Cannot' "${_s%/*}/log.${_p##*.}" 2>/dev/null |
-				tail -n 1 > "${_s%/*}/fail"
-			sleep 1
-		fi
+		wait "$!" && continue
+		_e=$?
+		# A fetch stopped at the end is not a failure.
+		[ -e "$_s" ] && break
+		# Each failed fetch adds its reason to the fail file (_as_dir counts
+		# the lines); one that failed at once (no route, refused) is tried
+		# again a second later, not in a spin.
+		_r=$(grep -E 'error|failed|Failed|refused|reset|timed out|Cannot' "$_l" 2>/dev/null | tail -n 1)
+		printf '%s\n' "${_r:-uclient-fetch exited with code $_e}" >> "${_s%/*}/fail"
+		sleep 1
 	done
 }
 
@@ -1675,8 +1680,8 @@ _as_kill() {
 # then AS_SECS, or less once test_mb has crossed the WAN. Sets AS_KBPS,
 # AS_CPU / AS_SIRQ (busiest core), AS_SQMAX (the core with the most packet
 # work), AS_DROP (packets the kernel dropped before a queue), AS_PING (loaded
-# latency) and AS_FAIL (the last failed fetch's reason, empty when none
-# failed).
+# latency), AS_FAIL (the last failed fetch's reason, empty when none
+# failed) and AS_FCNT (how many fetches failed).
 _as_dir() {
 	local _ctr _i=0 _n=0 _bs _b0="" _now _prev _u0 _u1 _cap _pp="" _c
 	# IPv4 only: _as_bind routes the test out through AS_WAN, and IPv6 can
@@ -1740,7 +1745,11 @@ _as_dir() {
 	fi
 	AS_PP=""
 	AS_PING=$(_as_ping "$AS_TMP/ping")
-	AS_FAIL=""; [ -s "$AS_TMP/fail" ] && read -r AS_FAIL < "$AS_TMP/fail"
+	AS_FAIL=""; AS_FCNT=0
+	if [ -s "$AS_TMP/fail" ]; then
+		AS_FAIL=$(tail -n 1 "$AS_TMP/fail")
+		AS_FCNT=$(($(wc -l < "$AS_TMP/fail")))
+	fi
 	AS_NOW=0
 }
 
@@ -1803,37 +1812,55 @@ _as_unbind() {
 ### the test that gets almost nothing from it runs again from a LibreSpeed
 ### server, and that direction stays there for the rest of the test.
 
+# $1 failed fetches are three a stream or more (a fetch that fails at once
+# is tried again a second later, so a server that refuses every fetch gives
+# about one a second a stream): its fetches kept failing, and what crossed
+# the WAN was other traffic, whatever the counters read.
+_as_dead() { [ "${1:-0}" -gt 0 ] && [ "$1" -ge $((AS_STREAMS * 3)) ]; }
+
 # The part just measured got almost nothing from its server: under 100
-# kbit/s, or a request refused with an HTTP error (429: too many tests).
+# kbit/s, its fetches kept failing, or a fetch refused with an HTTP error
+# (429: too many tests).
 _as_bad() {
 	[ "$AS_KBPS" -lt 100 ] && return 0
+	_as_dead "$AS_FCNT" && return 0
 	case "$AS_FAIL" in *"HTTP error"*) return 0 ;; esac
 	return 1
+}
+
+# Why, for the log.
+_as_why() {
+	if _as_dead "$AS_FCNT"; then printf '%s\n' "$AS_FCNT fetches failed, the last: $AS_FAIL"
+	else printf '%s\n' "${AS_FAIL:-almost nothing}"; fi
 }
 
 # What _as_dir measured, as the download ($1 = down) or the upload, from
 # server $2 (the test server's host, or librespeed).
 _as_take() {
 	if [ "$1" = down ]; then
-		AS_DN=$AS_KBPS; AS_CD=$AS_CPU; AS_SD=$AS_SIRQ; AS_PD=$AS_PING; AS_FD=$AS_FAIL
+		AS_DN=$AS_KBPS; AS_CD=$AS_CPU; AS_SD=$AS_SIRQ; AS_PD=$AS_PING; AS_FD=$AS_FAIL; AS_FCD=$AS_FCNT
 		AS_MD=$AS_SQMAX; AS_RD=$AS_DROP; AS_LD=$(_as_limit "$AS_DN" "$AS_CD"); AS_SDN=$2
 	else
-		AS_UP=$AS_KBPS; AS_CU=$AS_CPU; AS_SU=$AS_SIRQ; AS_PU=$AS_PING; AS_FU=$AS_FAIL
+		AS_UP=$AS_KBPS; AS_CU=$AS_CPU; AS_SU=$AS_SIRQ; AS_PU=$AS_PING; AS_FU=$AS_FAIL; AS_FCU=$AS_FCNT
 		AS_MU=$AS_SQMAX; AS_RU=$AS_DROP; AS_LU=$(_as_limit "$AS_UP" "$AS_CU"); AS_SUP=$2
 	fi
 }
 
 # One half of the test ($1 = down | up). Almost nothing from the test
-# server: the half again from LibreSpeed (_as_ls_use), and the higher of
-# the two readings counts.
+# server: the half again from LibreSpeed (_as_ls_use). The higher of the two
+# readings counts, or LibreSpeed's when the test server's fetches kept
+# failing and LibreSpeed's did not (the test server's reading was other
+# traffic).
 _as_half() {
-	local _k
+	local _k _c
 	_as_dir "$1"
 	_as_take "$1" "$AS_SRVH"
-	if _as_bad && _as_ls_use "$1" "the ${1}load" "${AS_FAIL:-almost nothing}"; then
-		_k=$AS_KBPS
+	if _as_bad && _as_ls_use "$1" "the ${1}load" "$(_as_why)"; then
+		_k=$AS_KBPS; _c=$AS_FCNT
 		_as_dir "$1"
-		[ "$AS_KBPS" -gt "$_k" ] && _as_take "$1" librespeed
+		if [ "$AS_KBPS" -gt "$_k" ] || { _as_dead "$_c" && ! _as_dead "$AS_FCNT"; }; then
+			_as_take "$1" librespeed
+		fi
 	fi
 	return 0
 }
@@ -1964,16 +1991,17 @@ _as_fit_clear() {
 # After the download half (AS_DN). Each queue's result: "pass|fail|nodata,
 # <kbps it carried>,<the busiest packet-work core %>,<packets dropped>,
 # <ping ms>", "missing" (no module), empty = not checked. nodata: the
-# download failed (under 100 kbit/s), or under half the rate it ran at
-# arrived with no core busy: nothing was measured.
+# download failed (under 100 kbit/s, or its fetches kept failing), or under
+# half the rate it ran at arrived with no core busy: nothing was measured.
 # The first pass ends it; so do nodata and a queue that could not be built
 # (no more requests to the test server).
 _as_fit() {
-	local _q _r _s="$AS_SECS" _hr _kb _th _t
+	local _q _r _s="$AS_SECS" _hr _kb _th _t _y
 	AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FR=""; AS_FN=""
 	[ "$(_as_num fit_check 1)" = 1 ] || return 0
-	# Another shaper on the WAN, shaping still on, or no download measured.
-	[ "$AS_FOREIGN" = no ] && [ "${_AS_NOFIT:-0}" = 0 ] && [ "${AS_DN:-0}" -ge 100 ] || return 0
+	# Another shaper on the WAN, shaping still on, or no download measured
+	# (under 100 kbit/s, or its fetches kept failing).
+	[ "$AS_FOREIGN" = no ] && [ "${_AS_NOFIT:-0}" = 0 ] && [ "${AS_DN:-0}" -ge 100 ] && ! _as_dead "$AS_FCD" || return 0
 	load_config >/dev/null 2>&1 || return 0
 	_hr=$BW_HEADROOM
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
@@ -2003,21 +2031,23 @@ _as_fit() {
 			while _as_fit_build "$_q" "$_kb" >/dev/null 2>&1; do
 				_as_dir down
 				_as_fit_clear
-				# Under 100 kbit/s (the download failed), or under half the rate it
-				# ran at with no core busy: nothing measured, and the check stops.
-				# A core at fit_sirq_pct, or drops: the CPU held it.
-				if [ "$AS_KBPS" -lt 100 ]; then _r=nodata
+				# Under 100 kbit/s or fetches that kept failing (the download
+				# failed), or under half the rate it ran at with no core busy:
+				# nothing measured, and the check stops. A core at fit_sirq_pct, or
+				# drops: the CPU held it.
+				if [ "$AS_KBPS" -lt 100 ] || _as_dead "$AS_FCNT"; then _r=nodata
 				elif [ "$AS_SQMAX" -ge "$_th" ]; then _r=fail
 				elif [ $((AS_KBPS * 2)) -lt "$_kb" ]; then _r=nodata
 				elif [ "$AS_DROP" -gt 0 ]; then _r=fail
 				else _r=pass; fi
 				if [ "$_r" = nodata ]; then
-					msg "speed test: queue check - $_q could not be measured: $(_as_mbit "$AS_KBPS") of $(_as_mbit "$_kb") Mbit arrived${AS_FAIL:+ ($AS_FAIL)}"
+					_y=$(_as_why)
+					msg "speed test: queue check - $_q could not be measured: $(_as_mbit "$AS_KBPS") of $(_as_mbit "$_kb") Mbit arrived${AS_FAIL:+ ($_y)}"
 				else
 					msg "speed test: queue check - $_q $_r: $(_as_mbit "$AS_KBPS") Mbit, busiest core ${AS_SQMAX}% packet work, $AS_DROP dropped, ping ${AS_PING:-?} ms"
 				fi
 				if [ "$_r" = nodata ] && [ -z "$_t" ] &&
-					_as_ls_use down "the queue check" "${AS_FAIL:-almost nothing}"; then
+					_as_ls_use down "the queue check" "$_y"; then
 					_t=1; continue
 				fi
 				break
@@ -2095,7 +2125,7 @@ autosetup_speedtest() {
 	AS_PHASE=start; AS_PROG=0; AS_NOW=0; AS_MSG=""; AS_PIDS=""; AS_BOUND=""
 	AS_DN=""; AS_UP=""; AS_P0=""; AS_PD=""; AS_PU=""
 	AS_CD=""; AS_SD=""; AS_CU=""; AS_SU=""; AS_LD=""; AS_LU=""
-	AS_MD=""; AS_RD=""; AS_MU=""; AS_RU=""; AS_FD=""; AS_FU=""
+	AS_MD=""; AS_RD=""; AS_MU=""; AS_RU=""; AS_FD=""; AS_FU=""; AS_FCD=0; AS_FCU=0; AS_FCNT=0
 	AS_FR=""; AS_FN=""; AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FITB=0
 	AS_SDN=$AS_SRVH; AS_SUP=$AS_SRVH; AS_LSH=""; AS_LSDL=""; AS_LSUL=""; AS_LSN=""; _AS_LSTRY=""
 	_AS_WAS=0; _AS_NOFIT=0
@@ -2139,7 +2169,8 @@ autosetup_speedtest() {
 	fi
 	AS_PHASE=done; AS_PROG=100
 	# Under 100 kbit either way: the test did not reach the server, or this
-	# is not the device the line is on. A download under 1/50 of the upload
+	# is not the device the line is on. Fetches that kept failing: what
+	# crossed the WAN was other traffic. A download under 1/50 of the upload
 	# is no line's speed either: almost nothing arrived. No result rather
 	# than a wrong one.
 	if [ "$AS_DN" -lt 100 ] || [ "$AS_UP" -lt 100 ]; then
@@ -2148,6 +2179,12 @@ autosetup_speedtest() {
 		[ "$AS_DN" -lt 100 ] && _w="download${AS_FD:+ ($AS_FD)}"
 		[ "$AS_UP" -lt 100 ] && _w="${_w:+$_w, }upload${AS_FU:+ ($AS_FU)}"
 		AS_MSG="almost no test traffic crossed $AS_WAN: $_w (down $(_as_mbit "$AS_DN"), up $(_as_mbit "$AS_UP") Mbit) - check that $AS_URL can be reached${AS_BOUND:+ through $AS_WAN}"
+	elif _as_dead "$AS_FCD" || _as_dead "$AS_FCU"; then
+		AS_PHASE=error
+		_w=""
+		_as_dead "$AS_FCD" && _w="download: $AS_FD"
+		_as_dead "$AS_FCU" && _w="${_w:+$_w; }upload: $AS_FU"
+		AS_MSG="the test's fetches kept failing ($_w), so its reading is not the line's speed - check that $AS_URL can be reached${AS_BOUND:+ through $AS_WAN}, or type the line's speeds"
 	elif [ $((AS_DN * 50)) -lt "$AS_UP" ]; then
 		AS_PHASE=error
 		AS_MSG="the download carried almost nothing (down $(_as_mbit "$AS_DN"), up $(_as_mbit "$AS_UP") Mbit)${AS_FD:+: $AS_FD} - try again in a few minutes, or type the line's speeds"
@@ -2164,7 +2201,7 @@ autosetup_speedtest() {
 	msg "speed test: download $(_as_mbit "$AS_DN") Mbit ($AS_LD limit, busiest core ${AS_CD}%), upload $(_as_mbit "$AS_UP") Mbit ($AS_LU limit, ${AS_CU}%)"
 	msg "speed test: ping ${AS_P0:-?} ms idle, ${AS_PD:-?} ms downloading, ${AS_PU:-?} ms uploading"
 	[ -z "$AS_MSG" ] || msg "speed test: $AS_MSG"
-	[ -z "$AS_FD$AS_FU" ] || msg "speed test: some fetches failed - download: ${AS_FD:-none}; upload: ${AS_FU:-none}"
+	[ -z "$AS_FD$AS_FU" ] || msg "speed test: some fetches failed - download: ${AS_FD:+$AS_FCD, the last: }${AS_FD:-none}; upload: ${AS_FU:+$AS_FCU, the last: }${AS_FU:-none}"
 	[ -z "$AS_LSN" ] || msg "speed test: LibreSpeed server $AS_LSN - download from $AS_SDN, upload from $AS_SUP"
 	return 0
 }
