@@ -194,6 +194,8 @@ config autosetup 'autosetup'
 	option cake_max_mbit '500'
 	option fit_check '1'
 	option fit_sirq_pct '80'
+	option fallback '1'
+	option fallback_list 'https://librespeed.org/backend-servers/servers.php'
 	option rules_low 'simple'
 	option rules_mid 'adaptive'
 	option rules_high 'adaptive'
@@ -1615,7 +1617,7 @@ _as_save() {
 		"cpu_down=$AS_CD" "sirq_down=$AS_SD" "sirqmax_down=$AS_MD" "drops_down=$AS_RD" \
 		"cpu_up=$AS_CU" "sirq_up=$AS_SU" "sirqmax_up=$AS_MU" "drops_up=$AS_RU" \
 		"limit_down=$AS_LD" "limit_up=$AS_LU" "fit_rate=$AS_FR" "fit_now=$AS_FN" \
-		"fail_down=$AS_FD" "fail_up=$AS_FU" \
+		"fail_down=$AS_FD" "fail_up=$AS_FU" "src_down=$AS_SDN" "src_up=$AS_SUP" "ls_server=$AS_LSN" \
 		"fit_cake=$AS_FCAKE" "fit_hfsc=$AS_FHFSC" "fit_htb=$AS_FHTB" "streams=$AS_STREAMS" "secs=$AS_SECS" \
 		"wan=$AS_WAN" "bound=${AS_BOUND:-0}" "msg=$AS_MSG" "at=$(($(_as_up100) / 100))" > "$AS_RUN.tmp" 2>/dev/null &&
 		mv -f "$AS_RUN.tmp" "$AS_RUN"
@@ -1678,14 +1680,14 @@ _as_kill() {
 _as_dir() {
 	local _ctr _i=0 _n=0 _bs _b0="" _now _prev _u0 _u1 _cap _pp="" _c
 	# IPv4 only: _as_bind routes the test out through AS_WAN, and IPv6 can
-	# run on another line. 90 MB a request (Cloudflare refuses 100 MB): fewer
-	# requests, and Cloudflare limits how many one address may make.
+	# run on another line. The test server's URLs, or a LibreSpeed server's
+	# once _as_ls_use has moved that direction.
 	if [ "$1" = down ]; then
 		_ctr="/sys/class/net/$AS_WAN/statistics/rx_bytes"
-		set -- -4 "$AS_URL/__down?bytes=90000000"
+		set -- -4 "$AS_DLU"
 	else
 		_ctr="/sys/class/net/$AS_WAN/statistics/tx_bytes"
-		set -- -4 --post-file="$AS_TMP/up" "$AS_URL/__up"
+		set -- -4 --post-file="$AS_TMP/up" "$AS_ULU"
 	fi
 	rm -f "$AS_TMP/stop" "$AS_TMP/ping" "$AS_TMP/fail"
 	AS_PIDS=""
@@ -1763,8 +1765,9 @@ _as_ip4() {
 
 # The test out through AS_WAN, whatever line the router's own traffic takes
 # (failover by metric, load balancing, pbr): the router's own packets (iif
-# lo: LAN traffic keeps its line) to the test server ($1) and the ping host
-# ($2) follow rules before mwan3's and pbr's to table AS_RT, which holds one
+# lo: LAN traffic keeps its line) to the test server ($1) and the other
+# hosts ($2 ...: the ping host, a LibreSpeed server) follow rules before
+# mwan3's and pbr's to table AS_RT, which holds one
 # default route over the WAN. A rule on the address alone: one with ipproto
 # or a port stops matching once mwan3 marks the packet in output and the
 # kernel routes it again (measured), and the packet left by the other line
@@ -1772,16 +1775,17 @@ _as_ip4() {
 # default route, the server's name does not resolve, another tool's rule
 # uses the table, or a rule is refused.
 _as_bind() {
-	local _l _gw _a _s
+	local _l _gw _a _s _h
 	_as_unbind
 	ip -4 rule show 2>/dev/null | grep -qw "lookup $AS_RT" && return 1
 	_s=$(_as_ip4 "$1")
 	[ -n "$_s" ] || return 1
+	shift
 	_l=$(ip -4 route show table all default dev "$AS_WAN" 2>/dev/null | head -n 1)
 	[ -n "$_l" ] || return 1
 	_gw=$(printf '%s\n' "$_l" | awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')
 	ip -4 route add default ${_gw:+via "$_gw"} dev "$AS_WAN" table "$AS_RT" 2>/dev/null || return 1
-	for _a in $({ printf '%s\n' "$_s"; _as_ip4 "$2"; } | sort -u); do
+	for _a in $({ printf '%s\n' "$_s"; for _h in "$@"; do _as_ip4 "$_h"; done; } | sort -u); do
 		ip -4 rule add pref "$AS_RT" to "$_a" iif lo lookup "$AS_RT" 2>/dev/null || { _as_unbind; return 1; }
 	done
 }
@@ -1793,6 +1797,136 @@ _as_unbind() {
 	while [ "$_n" -lt 64 ] && ip -4 rule del pref "$AS_RT" lookup "$AS_RT" 2>/dev/null; do _n=$((_n + 1)); done
 	ip -4 rule show 2>/dev/null | grep -qw "lookup $AS_RT" || ip -4 route flush table "$AS_RT" >/dev/null 2>&1
 	AS_BOUND=""
+}
+
+### LibreSpeed: the test server (test_url, Cloudflare's) first. A part of
+### the test that gets almost nothing from it runs again from a LibreSpeed
+### server, and that direction stays there for the rest of the test.
+
+# The part just measured got almost nothing from its server: under 100
+# kbit/s, or a request refused with an HTTP error (429: too many tests).
+_as_bad() {
+	[ "$AS_KBPS" -lt 100 ] && return 0
+	case "$AS_FAIL" in *"HTTP error"*) return 0 ;; esac
+	return 1
+}
+
+# What _as_dir measured, as the download ($1 = down) or the upload, from
+# server $2 (the test server's host, or librespeed).
+_as_take() {
+	if [ "$1" = down ]; then
+		AS_DN=$AS_KBPS; AS_CD=$AS_CPU; AS_SD=$AS_SIRQ; AS_PD=$AS_PING; AS_FD=$AS_FAIL
+		AS_MD=$AS_SQMAX; AS_RD=$AS_DROP; AS_LD=$(_as_limit "$AS_DN" "$AS_CD"); AS_SDN=$2
+	else
+		AS_UP=$AS_KBPS; AS_CU=$AS_CPU; AS_SU=$AS_SIRQ; AS_PU=$AS_PING; AS_FU=$AS_FAIL
+		AS_MU=$AS_SQMAX; AS_RU=$AS_DROP; AS_LU=$(_as_limit "$AS_UP" "$AS_CU"); AS_SUP=$2
+	fi
+}
+
+# One half of the test ($1 = down | up). Almost nothing from the test
+# server: the half again from LibreSpeed (_as_ls_use), and the higher of
+# the two readings counts.
+_as_half() {
+	local _k
+	_as_dir "$1"
+	_as_take "$1" "$AS_SRVH"
+	if _as_bad && _as_ls_use "$1" "the ${1}load" "${AS_FAIL:-almost nothing}"; then
+		_k=$AS_KBPS
+		_as_dir "$1"
+		[ "$AS_KBPS" -gt "$_k" ] && _as_take "$1" librespeed
+	fi
+	return 0
+}
+
+# One LibreSpeed server as a candidate line "index host download-URL
+# upload-URL name", plain HTTP whatever scheme the list gives; nothing when
+# the host or a path holds anything else (the list is data from the
+# internet). $1 index, $2 server, $3 / $4 download / upload paths, $5 name.
+_as_ls_add() {
+	local _b _hp _h _pa _d=${3#/} _u=${4#/} _m
+	_b=${2#https:}; _b=${_b#http:}
+	case "$_b" in //?*) ;; *) return 1 ;; esac
+	_b=${_b#//}; _hp=${_b%%/*}; _pa=${_b#"$_hp"}; _h=${_hp%:*}
+	case "$_hp" in *[!A-Za-z0-9.:-]*) return 1 ;; esac
+	case "$_h" in ''|-*|*[!A-Za-z0-9.-]*) return 1 ;; esac
+	case "$_pa/$_d/$_u" in *[!A-Za-z0-9._~/-]*) return 1 ;; esac
+	[ -n "$_d" ] && [ -n "$_u" ] || return 1
+	_m=$(printf '%s' "$5" | tr -cd 'A-Za-z0-9 ,.()&+-' | cut -c1-60)
+	_b="http://$_hp${_pa%/}"
+	printf '%s %s %s %s %s\n' "$1" "$_h" "$_b/$_d?ckSize=100" "$_b/$_u" "${_m:-$_h}"
+}
+
+# The LibreSpeed server, once a test: autosetup.fallback_url (the folder
+# that holds garbage.php and empty.php), else from fallback_list (the
+# public list): all pinged at once, then the three nearest asked in turn
+# for 1 MB; the first that sends it and does not redirect (to HTTPS: TLS
+# would cap a small router's reading at its CPU). Sets AS_LSH AS_LSDL
+# AS_LSUL AS_LSN.
+_as_ls_pick() {
+	local _f="$AS_TMP/ls" _u _n _i=0 _s _d _p _m _h _ms _pids=""
+	mkdir -p "$_f" || return 1
+	_u=$(uci -q get "$UCI_CFG.autosetup.fallback_url")
+	if [ -n "$_u" ]; then
+		_m=${_u#*://}; _m=${_m%%/*}
+		_as_ls_add 0 "$_u" garbage.php empty.php "$_m" > "$_f/c" || return 1
+	else
+		_u=$(uci -q get "$UCI_CFG.autosetup.fallback_list")
+		case "$_u" in http://*|https://*) ;; *) return 1 ;; esac
+		command -v jsonfilter >/dev/null 2>&1 || return 1
+		uclient-fetch -4 -q -T 10 -O "$_f/list" "$_u" </dev/null >/dev/null 2>&1 6>&- || return 1
+		_n=$(jsonfilter -i "$_f/list" -e '@[*].server' 2>/dev/null | wc -l)
+		: > "$_f/c"
+		while [ "$_i" -lt "$_n" ] && [ "$_i" -lt 64 ]; do
+			jsonfilter -i "$_f/list" -e "@[$_i].server" -e "@[$_i].dlURL" -e "@[$_i].ulURL" -e "@[$_i].name" > "$_f/e" 2>/dev/null
+			_s=""; _d=""; _p=""; _m=""
+			{ read -r _s; read -r _d; read -r _p; read -r _m; } < "$_f/e"
+			_as_ls_add "$_i" "$_s" "$_d" "$_p" "$_m" >> "$_f/c"
+			_i=$((_i + 1))
+		done
+	fi
+	[ -s "$_f/c" ] || return 1
+	while read -r _i _h _d _p _m; do
+		ping -q -c 2 -W 1 "$_h" > "$_f/p$_i" 2>&1 6>&- &
+		_pids="$_pids $!"
+	done < "$_f/c"
+	# shellcheck disable=SC2086  # a PID list
+	wait $_pids 2>/dev/null
+	# Nearest first, no answer last.
+	while read -r _i _h _d _p _m; do
+		_ms=$(_as_ping "$_f/p$_i")
+		echo "${_ms:-99999} $_i $_h $_d $_p $_m"
+	done < "$_f/c" | sort -n | head -n 3 > "$_f/n"
+	while read -r _ms _i _h _d _p _m; do
+		uclient-fetch -4 -T 5 -O /dev/null "${_d%\?*}?ckSize=1" </dev/null >"$_f/x" 2>&1 6>&- || continue
+		grep -q 'Redirected' "$_f/x" && continue
+		AS_LSH=$_h; AS_LSDL=$_d; AS_LSUL=$_p; AS_LSN=$_m
+		return 0
+	done < "$_f/n"
+	return 1
+}
+
+# Direction $1 (down | up) from the LibreSpeed server from now on: once a
+# test and only from the test server ($2 = what runs again, $3 = why). The
+# server is picked once (_as_ls_pick) and routed through the WAN with the
+# test server and the ping host. False with autosetup.fallback 0, or when
+# no server answers.
+_as_ls_use() {
+	case "$1" in
+		down) [ "$AS_DLU" = "$AS_LSDL" ] && return 1 ;;
+		*)    [ "$AS_ULU" = "$AS_LSUL" ] && return 1 ;;
+	esac
+	[ "$(_as_num fallback 1)" = 1 ] || return 1
+	if [ -z "$AS_LSN" ]; then
+		[ -z "$_AS_LSTRY" ] || return 1
+		_AS_LSTRY=1
+		if ! _as_ls_pick; then
+			msg "speed test: $2 from LibreSpeed: no server answered - $AS_SRVH: $3"
+			return 1
+		fi
+		[ "$AS_BOUND" = 1 ] && _as_bind "$AS_SRVH" "$AS_LSH" "$AS_PING_HOST" && AS_BOUND=1
+	fi
+	case "$1" in down) AS_DLU=$AS_LSDL ;; *) AS_ULU=$AS_LSUL ;; esac
+	msg "speed test: $2 again from LibreSpeed ($AS_LSN) - $AS_SRVH: $3"
 }
 
 ### Queue check: with shaping off and the line measured, the download path a
@@ -1835,7 +1969,7 @@ _as_fit_clear() {
 # The first pass ends it; so do nodata and a queue that could not be built
 # (no more requests to the test server).
 _as_fit() {
-	local _q _r _s="$AS_SECS" _hr _kb _th
+	local _q _r _s="$AS_SECS" _hr _kb _th _t
 	AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FR=""; AS_FN=""
 	[ "$(_as_num fit_check 1)" = 1 ] || return 0
 	# Another shaper on the WAN, shaping still on, or no download measured.
@@ -1863,7 +1997,10 @@ _as_fit() {
 		else
 			AS_FN=$_q; AS_PROG=0; AS_NOW=0; _as_save
 			msg "speed test: queue check - $_q on $IFB at $(_as_mbit "$_kb") Mbit"
-			if _as_fit_build "$_q" "$_kb" >/dev/null 2>&1; then
+			# Nothing measured from the test server: the same queue again from
+			# LibreSpeed (_as_ls_use: once a test, and only from the test server).
+			_t=""
+			while _as_fit_build "$_q" "$_kb" >/dev/null 2>&1; do
 				_as_dir down
 				_as_fit_clear
 				# Under 100 kbit/s (the download failed), or under half the rate it
@@ -1879,9 +2016,16 @@ _as_fit() {
 				else
 					msg "speed test: queue check - $_q $_r: $(_as_mbit "$AS_KBPS") Mbit, busiest core ${AS_SQMAX}% packet work, $AS_DROP dropped, ping ${AS_PING:-?} ms"
 				fi
+				if [ "$_r" = nodata ] && [ -z "$_t" ] &&
+					_as_ls_use down "the queue check" "${AS_FAIL:-almost nothing}"; then
+					_t=1; continue
+				fi
+				break
+			done
+			_as_fit_clear
+			if [ -n "$_r" ]; then
 				_r="$_r,$AS_KBPS,$AS_SQMAX,$AS_DROP,$AS_PING"
 			else
-				_as_fit_clear
 				msg "speed test: queue check - $_q could not be set up"
 			fi
 		fi
@@ -1915,7 +2059,7 @@ _as_end() {
 }
 
 autosetup_speedtest() {
-	local _kb _w _h
+	local _kb _w _k
 	command -v uclient-fetch >/dev/null 2>&1 || { err "uclient-fetch not found"; return 1; }
 	if command -v flock >/dev/null 2>&1; then
 		exec 6>> "$AS_LOCK"
@@ -1931,6 +2075,10 @@ autosetup_speedtest() {
 	# reach uclient-fetch or ping as an option.
 	case "$AS_URL" in http://*|https://*) ;; *) AS_URL=http://speed.cloudflare.com ;; esac
 	AS_URL=${AS_URL%/}
+	# Its host, and its URLs: 90 MB a request (Cloudflare refuses 100 MB):
+	# fewer requests, and Cloudflare limits how many one address may make.
+	AS_SRVH=${AS_URL#*://}; AS_SRVH=${AS_SRVH%%/*}; AS_SRVH=${AS_SRVH%:*}
+	AS_DLU="$AS_URL/__down?bytes=90000000"; AS_ULU="$AS_URL/__up"
 	AS_PING_HOST=$(uci -q get "$UCI_CFG.autosetup.ping_host")
 	case "$AS_PING_HOST" in ''|-*|*[!A-Za-z0-9.:-]*) AS_PING_HOST=1.1.1.1 ;; esac
 	AS_SECS=$(_as_num test_secs 10)
@@ -1949,6 +2097,7 @@ autosetup_speedtest() {
 	AS_CD=""; AS_SD=""; AS_CU=""; AS_SU=""; AS_LD=""; AS_LU=""
 	AS_MD=""; AS_RD=""; AS_MU=""; AS_RU=""; AS_FD=""; AS_FU=""
 	AS_FR=""; AS_FN=""; AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FITB=0
+	AS_SDN=$AS_SRVH; AS_SUP=$AS_SRVH; AS_LSH=""; AS_LSDL=""; AS_LSUL=""; AS_LSN=""; _AS_LSTRY=""
 	_AS_WAS=0; _AS_NOFIT=0
 	trap '_as_end' EXIT
 	trap 'exit 1' INT TERM
@@ -1962,8 +2111,7 @@ autosetup_speedtest() {
 	fi
 	# With two lines the router's own traffic may leave by the other one: the
 	# test server (the URL's host) and the ping host go through the WAN.
-	_h=${AS_URL#*://}; _h=${_h%%/*}; _h=${_h%:*}
-	_as_bind "$_h" "$AS_PING_HOST" && AS_BOUND=1
+	_as_bind "$AS_SRVH" "$AS_PING_HOST" && AS_BOUND=1
 	if [ -f /var/run/qos-ex-started ]; then
 		msg "speed test: shaping stopped for the test, started again after"
 		_AS_WAS=1
@@ -1973,17 +2121,22 @@ autosetup_speedtest() {
 	AS_P0=$(_as_ping "$AS_TMP/ping")
 	msg "speed test: download${AS_BOUND:+ through $AS_WAN}, $AS_STREAMS streams, ${AS_SECS} s ($AS_URL)"
 	AS_PHASE=down
-	_as_dir down
-	AS_DN=$AS_KBPS; AS_CD=$AS_CPU; AS_SD=$AS_SIRQ; AS_PD=$AS_PING; AS_FD=$AS_FAIL
-	AS_MD=$AS_SQMAX; AS_RD=$AS_DROP
-	AS_LD=$(_as_limit "$AS_DN" "$AS_CD")
+	_as_half down
 	_as_fit
 	msg "speed test: upload"
 	AS_PHASE=up
-	_as_dir up
-	AS_UP=$AS_KBPS; AS_CU=$AS_CPU; AS_SU=$AS_SIRQ; AS_PU=$AS_PING; AS_FU=$AS_FAIL
-	AS_MU=$AS_SQMAX; AS_RU=$AS_DROP
-	AS_LU=$(_as_limit "$AS_UP" "$AS_CU")
+	_as_half up
+	# A download under 1/50 of the upload from the test server: almost
+	# nothing arrived. The download and the queue check again from LibreSpeed.
+	if [ $((AS_DN * 50)) -lt "$AS_UP" ] && _as_ls_use down "the download" "under 1/50 of the upload"; then
+		AS_PHASE=down
+		_k=$AS_DN
+		_as_dir down
+		if [ "$AS_KBPS" -gt "$_k" ]; then
+			_as_take down librespeed
+			_as_fit
+		fi
+	fi
 	AS_PHASE=done; AS_PROG=100
 	# Under 100 kbit either way: the test did not reach the server, or this
 	# is not the device the line is on. A download under 1/50 of the upload
@@ -2012,6 +2165,7 @@ autosetup_speedtest() {
 	msg "speed test: ping ${AS_P0:-?} ms idle, ${AS_PD:-?} ms downloading, ${AS_PU:-?} ms uploading"
 	[ -z "$AS_MSG" ] || msg "speed test: $AS_MSG"
 	[ -z "$AS_FD$AS_FU" ] || msg "speed test: some fetches failed - download: ${AS_FD:-none}; upload: ${AS_FU:-none}"
+	[ -z "$AS_LSN" ] || msg "speed test: LibreSpeed server $AS_LSN - download from $AS_SDN, upload from $AS_SUP"
 	return 0
 }
 
@@ -2125,7 +2279,7 @@ _as_fitq() {
 
 _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel _mx=0 _cm _st=0 _ln _ls
-	local _fcap="" _fstop="" _cpu _qw _l0 _fw _pw
+	local _fcap="" _fstop="" _cpu _qw _l0 _fw _pw _sw
 	# Line rates are the line's speed: the shaper takes Headroom off them.
 	_hr=$(uci -q get "$UCI_CFG.settings.bw_headroom")
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
@@ -2230,12 +2384,23 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 					_w=""
 				fi
 			fi
+			# Measured from a LibreSpeed server: named, as its own limit may be
+			# under the line's.
+			_sw=""
+			if [ "$_src" = "the speed test" ]; then
+				case "${_v% *}" in download_kbps) _sw=src_down ;; *) _sw=src_up ;; esac
+				if [ "$(_as_kv "$_sw" "$AS_RUN")" = librespeed ]; then
+					_sw=" (LibreSpeed: $(_as_kv ls_server "$AS_RUN"))"
+				else
+					_sw=""
+				fi
+			fi
 			# No queue keeps up at the line's speed: what the lightest shapes.
 			if [ -n "$_fcap" ] && [ $((_q * _hr / 100)) -gt "$_fcap" ]; then
 				_q=$((_fcap * 100 / _hr))
 				_w="$_w, cut to $(_as_mbit "$_q") Mbit: this router's CPU shapes about $(_as_mbit "$_fcap") Mbit (queue check)"
 			fi
-			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_l0") Mbit from $_src$_pw$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
+			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_l0") Mbit from $_src$_sw$_pw$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
 		done
 	else
 		_as_note "No line speed yet: run the speed test, or give the line's download and upload speeds."
