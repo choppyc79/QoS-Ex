@@ -1354,10 +1354,25 @@ _as_hw() {
 	AS_HW_SAVED=$(uci -q get "$UCI_CFG.autosetup.hw")
 }
 
+# True when the hardware recorded at setup (AS_HW_SAVED) is other hardware
+# than this (AS_HW): another board or core count, or RAM more than 5% off.
+# MemTotal leaves out the kernel's own size, so a new kernel (an OpenWrt
+# upgrade) moves it a little: that is not new hardware.
+_as_hw_moved() {
+	local _s _n _sb _nb _sm _nm _d
+	[ -n "$AS_HW_SAVED" ] && [ "$AS_HW_SAVED" != "$AS_HW" ] || return 1
+	_sm=${AS_HW_SAVED##*/}; _s=${AS_HW_SAVED%/*}; _sb=${_s%/*}; _s=${_s##*/}
+	_nm=${AS_HW##*/};       _n=${AS_HW%/*};       _nb=${_n%/*}; _n=${_n##*/}
+	[ "$_sb" = "$_nb" ] && [ "$_s" = "$_n" ] || return 0
+	_isnum "$_sm" && _isnum "$_nm" && [ "$_sm" -gt 0 ] || return 0
+	_d=$((_sm - _nm)); [ "$_d" -lt 0 ] && _d=$((0 - _d))
+	[ $((_d * 100)) -gt $((_sm * 5)) ]
+}
+
 # The fingerprint lines probe and hw print.
 _as_hw_lines() {
 	printf '%s\n' "hw=$AS_HW" "hw_saved=$AS_HW_SAVED" \
-		"hw_changed=$([ -n "$AS_HW_SAVED" ] && [ "$AS_HW_SAVED" != "$AS_HW" ] && echo 1 || echo 0)" \
+		"hw_changed=$(_as_hw_moved && echo 1 || echo 0)" \
 		"setup_done=$(uci -q get "$UCI_CFG.autosetup.done")" \
 		"undo=$([ -f "$AS_BAK" ] || [ -f "$AS_STEER_BAK" ] && echo 1 || echo 0)"
 }
@@ -1726,10 +1741,11 @@ _as_dir() {
 	AS_NOW=0
 }
 
-# What held the rate: the router's CPU, the WAN port, or the line.
+# What held the rate: the WAN port, the router's CPU, or the line. A test
+# that filled the port was held by the port, however busy a core was.
 _as_limit() {   # $1 = kbps, $2 = busiest core %
-	if [ "${2:-0}" -ge "$(_as_num cpu_busy_pct 90)" ]; then echo router
-	elif [ "$AS_SPEED" -gt 0 ] && [ "$1" -ge $((AS_SPEED * 900)) ]; then echo port
+	if [ "$AS_SPEED" -gt 0 ] && [ "$1" -ge $((AS_SPEED * 900)) ]; then echo port
+	elif [ "${2:-0}" -ge "$(_as_num cpu_busy_pct 90)" ]; then echo router
 	else echo line; fi
 }
 
@@ -2079,7 +2095,7 @@ _as_fitq() {
 
 _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel _mx=0 _cm _st=0 _ln _ls
-	local _fcap="" _fstop="" _cpu _qw _l0 _fw
+	local _fcap="" _fstop="" _cpu _qw _l0 _fw _pw
 	# Line rates are the line's speed: the shaper takes Headroom off them.
 	_hr=$(uci -q get "$UCI_CFG.settings.bw_headroom")
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
@@ -2169,8 +2185,11 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 				[ "$_src" = "the speeds given" ] && _as_sug "settings.${_v% *}" 0 "0 = this direction is not shaped"
 				continue
 			fi
-			# Never over the WAN port's speed.
-			[ "$AS_SPEED" -gt 0 ] && [ "$_q" -gt $((AS_SPEED * 1000)) ] && _q=$((AS_SPEED * 1000))
+			# Never over the WAN port's speed, and the row says so.
+			_l0=$_q; _pw=""
+			if [ "$AS_SPEED" -gt 0 ] && [ "$_q" -gt $((AS_SPEED * 1000)) ]; then
+				_q=$((AS_SPEED * 1000)); _pw=", cut to the WAN port's $AS_SPEED Mbit"
+			fi
 			# A direction the router's CPU held back: the line may be faster.
 			_w=""
 			if [ "$_src" = "the speed test" ]; then
@@ -2182,12 +2201,11 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 				fi
 			fi
 			# No queue keeps up at the line's speed: what the lightest shapes.
-			_l0=$_q
 			if [ -n "$_fcap" ] && [ $((_q * _hr / 100)) -gt "$_fcap" ]; then
 				_q=$((_fcap * 100 / _hr))
 				_w="$_w, cut to $(_as_mbit "$_q") Mbit: this router's CPU shapes about $(_as_mbit "$_fcap") Mbit (queue check)"
 			fi
-			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_l0") Mbit from $_src$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
+			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_l0") Mbit from $_src$_pw$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
 		done
 	else
 		_as_note "No line speed yet: run the speed test, or give the line's download and upload speeds."
@@ -2300,7 +2318,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		esac
 	fi
 	[ "$AS_FOREIGN" = no ] || _as_note "Another shaper ($AS_FOREIGN) is on $AS_WAN: stop it before QoS-Ex starts."
-	[ -n "$AS_HW_SAVED" ] && [ "$AS_HW_SAVED" != "$AS_HW" ] &&
+	_as_hw_moved &&
 		_as_note "This config was set up on other hardware ($AS_HW_SAVED, now $AS_HW): check these suggestions."
 	if [ "$_src" = "the speed test" ]; then
 		_v=$(_as_kv ping_idle "$AS_RUN")
@@ -2318,7 +2336,9 @@ autosetup_suggest() {
 	[ "${3:-}" = -p ] && _p=1
 	_as_probe
 	_tmp=$(mktemp /tmp/qos-ex-sugg.XXXXXX 2>/dev/null) || { err "no temp file"; return 1; }
-	_as_suggest "$@" > "$_tmp"
+	# When they were made (uptime, s): apply refuses them an hour on, and
+	# LuCI hands it back (at=) so it applies only the ones it showed.
+	{ echo "sugg_at=$(($(_as_up100) / 100))"; _as_suggest "$@"; } > "$_tmp"
 	[ "$_p" = 0 ] || _as_probe_out
 	cat "$_tmp"
 	mv -f "$_tmp" "$AS_SUGG"
@@ -2333,17 +2353,28 @@ _as_macs() {
 	done
 }
 
+# True while a speed test holds its lock.
+_as_testing() {
+	command -v flock >/dev/null 2>&1 || return 1
+	! flock -n "$AS_LOCK" true 2>/dev/null
+}
+
 # Apply suggestions from the last suggest: all (packet steering apart), the
 # word steering, or keys by name. dev=<MAC> / low=<MAC> (repeatable) set the
-# gaming / low-priority devices; dev= or low= alone empties that list. The
-# config is copied first, for undo. The Ping Filter is set up on its own (its
-# pages' setup card), never here.
+# gaming / low-priority devices; dev= or low= alone empties that list. at=
+# (LuCI) names the suggestions the page showed: other ones are refused. The
+# config is copied first, for undo, and kept only when something changed. The
+# Ping Filter is set up on its own (its pages' setup card), never here.
 autosetup_apply() {
 	local _t _k _cur _new _why _a _sel _n=0 _bak=0 _steer="" _devs="" _lows="" _dset=0 _lset=0 _m _old _was
+	local _want="" _only="" _at _now _chg=""
 	[ -f "$AS_SUGG" ] || { err "no suggestions yet - run: qos-ex.sh autosetup suggest"; return 1; }
+	# An apply under a running speed test would start shaping under it.
+	_as_testing && { err "a speed test is running - apply once it has ended"; return 1; }
 	[ $# -gt 0 ] || set -- all
 	for _a in "$@"; do
 		case "$_a" in
+			at=*) _want=${_a#at=} ;;
 			dev=*|low=*)
 				# Lower-cased first: LuCI sends lower case, a hand-typed MAC
 				# may not. Anything else but empty is not a device: ignored.
@@ -2355,11 +2386,21 @@ autosetup_apply() {
 					*) continue ;;
 				esac
 				case "$_a" in dev=*) _dset=1 ;; *) _lset=1 ;; esac ;;
+			*) _only="$_only $_a" ;;
 		esac
 	done
-	if [ "$*" != steering ]; then
+	# The suggestions: under an hour old (an older file is another line, or
+	# another speed test), and the ones the page showed.
+	_at=$(_as_kv sugg_at "$AS_SUGG")
+	_now=$(($(_as_up100) / 100))
+	if ! _isnum "$_at" || [ "$_now" -lt "$_at" ] || [ $((_now - _at)) -ge 3600 ]; then
+		err "the suggestions are over an hour old - run: qos-ex.sh autosetup suggest"; return 1
+	fi
+	[ -z "$_want" ] || [ "$_want" = "$_at" ] ||
+		{ err "the suggestions changed since they were shown (another window?) - look at them again"; return 1; }
+	if [ "$_only" != " steering" ]; then
 		mkdir -p /etc/qos-ex 2>/dev/null
-		cp "/etc/config/$UCI_CFG" "$AS_BAK" 2>/dev/null || { err "could not copy the config - nothing changed"; return 1; }
+		cp "/etc/config/$UCI_CFG" "$AS_BAK.new" 2>/dev/null || { err "could not copy the config - nothing changed"; return 1; }
 		_bak=1
 	fi
 	while IFS='|' read -r _t _k _cur _new _why; do
@@ -2382,6 +2423,7 @@ autosetup_apply() {
 		[ "$_bak" = 1 ] || continue
 		uci -q set "$UCI_CFG.$_k=$_new" || continue
 		msg "auto setup: $_k = $_new (was ${_cur:-unset})"
+		_chg="$_chg $_k"
 		_n=$((_n + 1))
 	done < "$AS_SUGG"
 	# Devices by MAC. A device is never gaming and low priority both: gaming
@@ -2409,16 +2451,26 @@ autosetup_apply() {
 		fi
 		if [ "$(_as_macs)" != "$_was" ]; then
 			msg "auto setup: gaming devices = $(uci -q get "$UCI_CFG.ips.gaming_mac"), low priority = $(uci -q get "$UCI_CFG.ips.lowprio_mac")"
+			_chg="$_chg ips.gaming_mac ips.lowprio_mac pingfilter.pf_devices"
 			_n=$((_n + 1))
 		fi
 	fi
 	# Set up either way: Auto Setup is not offered again on this hardware.
 	# Packet steering alone is not the setup. A setting left blank by a
-	# reset and not applied: the default.
+	# reset and not applied: the default (and undo blanks it again). The
+	# copy for undo names the keys this apply changed, the switch (Apply and
+	# start turns it on) and the setup state; one that changed nothing keeps
+	# the last copy, so undo still reaches the apply before it.
 	if [ "$_bak" = 1 ]; then
+		for _k in $AS_BLANK; do [ -n "$(uci -q get "$UCI_CFG.$_k")" ] || _chg="$_chg $_k"; done
 		_as_hw
 		_as_done 1 "$AS_HW"
 		_as_fill
+		if [ -n "$_chg" ]; then
+			{ echo "# autosetup undo:$_chg settings.enabled autosetup.done autosetup.hw"; cat "$AS_BAK.new"; } \
+				> "$AS_BAK.tmp" 2>/dev/null && mv -f "$AS_BAK.tmp" "$AS_BAK"
+		fi
+		rm -f "$AS_BAK.new" "$AS_BAK.tmp" 2>/dev/null
 	fi
 	if [ -n "$_steer" ] && uci -q get network.@globals[0] >/dev/null; then
 		mkdir -p /etc/qos-ex 2>/dev/null
@@ -2435,25 +2487,37 @@ autosetup_apply() {
 	return 0
 }
 
-# Put back the config and packet steering as they were before the last apply.
+# Put back what the last apply changed, and packet steering: the keys its
+# copy names, each as the copy has it (read by uci from the copy, with no
+# change file of its own); anything else changed since stays. A copy from an
+# older shaper names no keys: every key an apply can set.
 autosetup_undo() {
-	local _v="" _n=0 _tmp
+	local _v="" _n=0 _d _keys _k _l
+	_as_testing && { err "a speed test is running - undo once it has ended"; return 1; }
 	if [ -f "$AS_BAK" ]; then
-		_tmp=$(mktemp "/etc/config/.$UCI_CFG.XXXXXX" 2>/dev/null) || { err "could not write /etc/config"; return 1; }
-		if cp "$AS_BAK" "$_tmp" 2>/dev/null; then
-			# Changes staged with the uci CLI belong to the config going away.
-			uci -q revert "$UCI_CFG"
-			chmod 644 "$_tmp" 2>/dev/null
-			mv -f "$_tmp" "/etc/config/$UCI_CFG"
-			rm -f "$AS_BAK"
-			# autosetup.done comes back as it was (0: Apply is on the Auto
-			# Setup tab), so LuCI builds its menu again, as after _as_done.
-			rm -f /tmp/luci-indexcache* 2>/dev/null
-			msg "auto setup: config put back as it was before the last apply"
-			_n=1
-		else
-			rm -f "$_tmp"; err "could not restore $AS_BAK"; return 1
-		fi
+		_d=$(mktemp -d /tmp/qos-ex-undo.XXXXXX 2>/dev/null) || { err "no temp directory"; return 1; }
+		cp "$AS_BAK" "$_d/$UCI_CFG" 2>/dev/null || { rm -rf "$_d"; err "could not read $AS_BAK"; return 1; }
+		_keys=$(sed -n '1s/^# autosetup undo://p' "$AS_BAK")
+		[ -n "$_keys" ] || _keys="$AS_KEYS $AS_BLANK ips.gaming_mac ips.lowprio_mac pingfilter.pf_devices settings.enabled autosetup.done autosetup.hw"
+		# Changes staged with the uci CLI belong to the config being put back.
+		uci -q revert "$UCI_CFG"
+		for _k in $_keys; do
+			case "$_k" in network.*|*[!A-Za-z0-9._-]*) continue ;; esac
+			_v=$(uci -c "$_d" -t "$_d" -q get "$UCI_CFG.$_k")
+			uci -q delete "$UCI_CFG.$_k"
+			case "$_k" in
+				ips.gaming_mac|ips.lowprio_mac|pingfilter.pf_devices)
+					for _l in $_v; do uci -q add_list "$UCI_CFG.$_k=$_l"; done ;;
+				*) [ -z "$_v" ] || uci -q set "$UCI_CFG.$_k=$_v" ;;
+			esac
+		done
+		uci -q commit "$UCI_CFG"
+		rm -rf "$_d"; rm -f "$AS_BAK"
+		# autosetup.done comes back as it was (0: Apply is on the Auto Setup
+		# tab), so LuCI builds its menu again, as after _as_done.
+		rm -f /tmp/luci-indexcache* 2>/dev/null
+		msg "auto setup: what the last apply changed is back as it was"
+		_n=1
 	fi
 	if [ -f "$AS_STEER_BAK" ]; then
 		read -r _v < "$AS_STEER_BAK"
