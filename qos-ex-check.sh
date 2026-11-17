@@ -18,6 +18,8 @@
 #     rules     each other rule set in turn, then back       a settings change, undone (three reloads)
 #     queue     HTB for a moment, then back                  a settings change, undone; shaping off ~10 s twice
 #     update    two Update now at once                       runs the updater: installs what changed, if anything
+#     speedtest Auto Setup's speed test and queue check      shaping and the Ping Filter off about a
+#                                                            minute; traffic to Cloudflare
 #     debug     the sanitized debug report at the end        read-only
 #
 # Each result line starts PASS, FAIL, INFO or SKIP. Everything is also saved to
@@ -129,6 +131,13 @@ shaper() {
 	if [ "$n" = 0 ]; then pass "no speed-test routing rule left (shaper 3.2.2.3)"
 	elif ! flock -n /var/run/qos-ex-autosetup.lock true 2>/dev/null; then info "a speed test is running: $n routing rule(s) for it"
 	else fail "$n speed-test routing rule(s) left (ip -4 rule show: lookup 900)"; fi
+	# Shaper 3.2.2.4: Auto Setup's queue check; its two options come with the
+	# config top-up.
+	v=$(uci -q get qos-ex.autosetup.fit_check) s=$(uci -q get qos-ex.autosetup.fit_sirq_pct)
+	if [ -n "$v" ] && [ -n "$s" ]; then pass "autosetup.fit_check=$v, fit_sirq_pct=$s (shaper 3.2.2.4)"
+	else fail "autosetup.fit_check / fit_sirq_pct missing (the config top-up adds them)"; fi
+	grep -qE '^fit_(cake|hfsc|htb)=.' /var/run/qos-ex-autosetup 2>/dev/null &&
+		info "last queue check: $(grep -E '^fit_(rate|cake|hfsc|htb)=' /var/run/qos-ex-autosetup | tr '\n' ' ')"
 	[ "$(st offload_sw)$(st offload_hw)" = 00 ] && pass "flow offloading off" || fail "flow offloading on (sw=$(st offload_sw) hw=$(st offload_hw))"
 	[ "$(st ct_acct)" = 1 ] && pass "nf_conntrack_acct on" || fail "nf_conntrack_acct=$(st ct_acct)"
 	[ -z "$(st pkg_missing)" ] && pass "no package missing" || fail "packages missing: $(st pkg_missing)"
@@ -677,13 +686,66 @@ test_redial() {
 	ping -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 && info "internet back (ping 1.1.1.1)" || info "no reply from 1.1.1.1 yet"
 }
 
+# The real speed test, its phases followed in its state file, then what it
+# left: shaping as before, nothing of the queue check, no routing rule.
+test_speedtest() {
+	sec "TEST speedtest: Auto Setup's speed test and queue check (shaping off about a minute)"
+	R=/var/run/qos-ex-autosetup
+	w0=0; running && w0=1
+	W=$(st wan_live); [ -n "$W" ] || W=$(st wan)
+	QD=$(rootkind "$W")
+	: > "$T/phases"
+	t=$(now)
+	"$Q" autosetup speedtest > "$T/speed.out" 2>&1 &
+	p=$!
+	while kill -0 "$p" 2>/dev/null; do
+		ph=$(sed -n 's/^phase=//p' "$R" 2>/dev/null) fn=$(sed -n 's/^fit_now=//p' "$R" 2>/dev/null)
+		[ -n "$ph" ] && echo "$ph${fn:+:$fn}" >> "$T/phases"
+		sleep 1
+	done
+	wait "$p"; rc=$?
+	seen=$(uniq "$T/phases" | tr '\n' ' ')
+	info "phases seen in $(($(now) - t)) s: $seen"
+	if [ "$rc" = 0 ]; then pass "speed test finished"
+	else fail "speed test rc=$rc: $(tail -n 2 "$T/speed.out" | tr '\n' ' ')"; fi
+	for k in down up; do
+		case " $seen " in *" $k "*) pass "the page is told the $k phase (shaper 3.2.2.4)" ;; *) fail "no $k phase in the state file" ;; esac
+	done
+	info "$(grep -E '^(down_kbps|up_kbps|cpu_down|sirq_down|sirqmax_down|drops_down|cpu_up|sirqmax_up|drops_up|limit_down|limit_up|bound)=' "$R" | tr '\n' ' ')"
+	if [ "$(uci -q get qos-ex.autosetup.fit_check)" = 0 ]; then
+		info "the queue check is off (autosetup.fit_check 0)"
+	elif grep -qE '^fit_(cake|hfsc|htb)=(pass|fail),' "$R"; then
+		pass "queue check: $(grep -E '^fit_(rate|cake|hfsc|htb)=' "$R" | tr '\n' ' ')"
+		case " $seen " in *" fit:"*) pass "the page is told which queue is being checked" ;; *) fail "no fit phase in the state file" ;; esac
+	else
+		fail "no queue checked: $(grep -E '^fit_' "$R" | tr '\n' ' ')"
+	fi
+	if [ "$w0" = 1 ]; then
+		if wait_running 30; then pass "shaping running again ($(rootkind "$W") on $W)"
+		else fail "shaping not running 30 s after the test"; fi
+		if [ "$(rootkind "$W")" = "$QD" ]; then pass "$W root back to $QD"
+		else fail "$W root $(rootkind "$W"), was $QD"; fi
+	else
+		if tc qdisc show dev "$W" 2>/dev/null | grep -q 'qdisc ingress '; then fail "an ingress qdisc is left on $W"
+		else pass "no ingress qdisc left on $W"; fi
+		n=0; for d in /sys/class/net/ifb*; do [ -r "$d/ifalias" ] && [ "$(cat "$d/ifalias")" = qos-ex ] && n=$((n + 1)); done
+		if [ "$n" = 0 ]; then pass "no QoS-Ex IFB left"
+		else fail "$n QoS-Ex IFB(s) left: $(ifbs)"; fi
+	fi
+	n=$(ip -4 rule show 2>/dev/null | grep -cE '^900:.* lookup 900( |$)')
+	if [ "$n" = 0 ]; then pass "no speed-test routing rule left"
+	else fail "$n speed-test routing rule(s) left"; fi
+	grep 'queue check' "$T/speed.out" | ind
+	"$Q" autosetup suggest 2>/dev/null | grep -E '^(set|keep)\|settings\.qdisc\|' | while read -r l; do info "Auto Setup's queue: $l"; done
+}
+
 main() {
 	echo "QoS-Ex check $(date '+%Y-%m-%d %H:%M:%S'), script #$(sha256sum "$0" 2>/dev/null | cut -c1-10), arguments: ${*:-none}"
 	versions; shaper; nftables; queues; dscp_restore; ef_fixes; ctmark; hook; counters; app_calls; gameflows; pingfilter; logs
 	for a in "$@"; do
 		case "$a" in
 			match) match ;;
-			reload|burst|restart|ifb|branch|redial|rules|queue|update) "test_$a" ;;
+			reload|burst|restart|ifb|branch|redial|rules|queue|update|speedtest) "test_$a" ;;
 			debug) sec "Debug report (sanitized)"; cat "$T/debug" 2>/dev/null || "$Q" debug 2>&1 ;;
 			*) sec "Unknown argument: $a" ;;
 		esac
