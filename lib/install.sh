@@ -1615,6 +1615,7 @@ _as_save() {
 		"cpu_down=$AS_CD" "sirq_down=$AS_SD" "sirqmax_down=$AS_MD" "drops_down=$AS_RD" \
 		"cpu_up=$AS_CU" "sirq_up=$AS_SU" "sirqmax_up=$AS_MU" "drops_up=$AS_RU" \
 		"limit_down=$AS_LD" "limit_up=$AS_LU" "fit_rate=$AS_FR" "fit_now=$AS_FN" \
+		"fail_down=$AS_FD" "fail_up=$AS_FU" \
 		"fit_cake=$AS_FCAKE" "fit_hfsc=$AS_FHFSC" "fit_htb=$AS_FHTB" "streams=$AS_STREAMS" "secs=$AS_SECS" \
 		"wan=$AS_WAN" "bound=${AS_BOUND:-0}" "msg=$AS_MSG" "at=$(($(_as_up100) / 100))" > "$AS_RUN.tmp" 2>/dev/null &&
 		mv -f "$AS_RUN.tmp" "$AS_RUN"
@@ -1826,10 +1827,12 @@ _as_fit_clear() {
 	AS_FITB=0
 }
 
-# After the download half (AS_DN). Each queue's result: "pass|fail,<kbps it
-# carried>,<the busiest packet-work core %>,<packets dropped>,<ping ms>",
-# "missing" (no module), empty = not checked. The first pass ends it; a
-# queue that could not be built, or a download that failed, ends it too
+# After the download half (AS_DN). Each queue's result: "pass|fail|nodata,
+# <kbps it carried>,<the busiest packet-work core %>,<packets dropped>,
+# <ping ms>", "missing" (no module), empty = not checked. nodata: the
+# download failed (under 100 kbit/s), or under half the rate it ran at
+# arrived with no core busy: nothing was measured.
+# The first pass ends it; so do nodata and a queue that could not be built
 # (no more requests to the test server).
 _as_fit() {
 	local _q _r _s="$AS_SECS" _hr _kb _th
@@ -1863,13 +1866,20 @@ _as_fit() {
 			if _as_fit_build "$_q" "$_kb" >/dev/null 2>&1; then
 				_as_dir down
 				_as_fit_clear
-				if [ "$AS_KBPS" -ge 100 ]; then
-					if [ "$AS_DROP" -gt 0 ] || [ "$AS_SQMAX" -ge "$_th" ]; then _r=fail; else _r=pass; fi
-					msg "speed test: queue check - $_q $_r: $(_as_mbit "$AS_KBPS") Mbit, busiest core ${AS_SQMAX}% packet work, $AS_DROP dropped, ping ${AS_PING:-?} ms"
-					_r="$_r,$AS_KBPS,$AS_SQMAX,$AS_DROP,$AS_PING"
+				# Under 100 kbit/s (the download failed), or under half the rate it
+				# ran at with no core busy: nothing measured, and the check stops.
+				# A core at fit_sirq_pct, or drops: the CPU held it.
+				if [ "$AS_KBPS" -lt 100 ]; then _r=nodata
+				elif [ "$AS_SQMAX" -ge "$_th" ]; then _r=fail
+				elif [ $((AS_KBPS * 2)) -lt "$_kb" ]; then _r=nodata
+				elif [ "$AS_DROP" -gt 0 ]; then _r=fail
+				else _r=pass; fi
+				if [ "$_r" = nodata ]; then
+					msg "speed test: queue check - $_q could not be measured: $(_as_mbit "$AS_KBPS") of $(_as_mbit "$_kb") Mbit arrived${AS_FAIL:+ ($AS_FAIL)}"
 				else
-					msg "speed test: queue check - $_q: the download failed${AS_FAIL:+ ($AS_FAIL)}"
+					msg "speed test: queue check - $_q $_r: $(_as_mbit "$AS_KBPS") Mbit, busiest core ${AS_SQMAX}% packet work, $AS_DROP dropped, ping ${AS_PING:-?} ms"
 				fi
+				_r="$_r,$AS_KBPS,$AS_SQMAX,$AS_DROP,$AS_PING"
 			else
 				_as_fit_clear
 				msg "speed test: queue check - $_q could not be set up"
@@ -1937,7 +1947,7 @@ autosetup_speedtest() {
 	AS_PHASE=start; AS_PROG=0; AS_NOW=0; AS_MSG=""; AS_PIDS=""; AS_BOUND=""
 	AS_DN=""; AS_UP=""; AS_P0=""; AS_PD=""; AS_PU=""
 	AS_CD=""; AS_SD=""; AS_CU=""; AS_SU=""; AS_LD=""; AS_LU=""
-	AS_MD=""; AS_RD=""; AS_MU=""; AS_RU=""
+	AS_MD=""; AS_RD=""; AS_MU=""; AS_RU=""; AS_FD=""; AS_FU=""
 	AS_FR=""; AS_FN=""; AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FITB=0
 	_AS_WAS=0; _AS_NOFIT=0
 	trap '_as_end' EXIT
@@ -1976,14 +1986,21 @@ autosetup_speedtest() {
 	AS_LU=$(_as_limit "$AS_UP" "$AS_CU")
 	AS_PHASE=done; AS_PROG=100
 	# Under 100 kbit either way: the test did not reach the server, or this
-	# is not the device the line is on. No result rather than a wrong one.
+	# is not the device the line is on. A download under 1/50 of the upload
+	# is no line's speed either: almost nothing arrived. No result rather
+	# than a wrong one.
 	if [ "$AS_DN" -lt 100 ] || [ "$AS_UP" -lt 100 ]; then
 		AS_PHASE=error
 		_w=""
 		[ "$AS_DN" -lt 100 ] && _w="download${AS_FD:+ ($AS_FD)}"
 		[ "$AS_UP" -lt 100 ] && _w="${_w:+$_w, }upload${AS_FU:+ ($AS_FU)}"
 		AS_MSG="almost no test traffic crossed $AS_WAN: $_w (down $(_as_mbit "$AS_DN"), up $(_as_mbit "$AS_UP") Mbit) - check that $AS_URL can be reached${AS_BOUND:+ through $AS_WAN}"
-		# 429: the server limits how many tests one address may run.
+	elif [ $((AS_DN * 50)) -lt "$AS_UP" ]; then
+		AS_PHASE=error
+		AS_MSG="the download carried almost nothing (down $(_as_mbit "$AS_DN"), up $(_as_mbit "$AS_UP") Mbit)${AS_FD:+: $AS_FD} - try again in a few minutes, or type the line's speeds"
+	fi
+	# 429: the server limits how many tests one address may run.
+	if [ "$AS_PHASE" = error ]; then
 		case "$AS_FD$AS_FU" in *"HTTP error 429"*)
 			AS_MSG="the test server is limiting tests from this address (HTTP error 429) - try again later, or type the line's speeds" ;;
 		esac
@@ -1994,6 +2011,7 @@ autosetup_speedtest() {
 	msg "speed test: download $(_as_mbit "$AS_DN") Mbit ($AS_LD limit, busiest core ${AS_CD}%), upload $(_as_mbit "$AS_UP") Mbit ($AS_LU limit, ${AS_CU}%)"
 	msg "speed test: ping ${AS_P0:-?} ms idle, ${AS_PD:-?} ms downloading, ${AS_PU:-?} ms uploading"
 	[ -z "$AS_MSG" ] || msg "speed test: $AS_MSG"
+	[ -z "$AS_FD$AS_FU" ] || msg "speed test: some fetches failed - download: ${AS_FD:-none}; upload: ${AS_FU:-none}"
 	return 0
 }
 
@@ -2032,10 +2050,13 @@ _as_fit_th() {
 # and HTB whose busiest packet-work core, scaled from the rate it carried to
 # $1 (that work grows with the rate), stays under fit_sirq_pct, with nothing
 # dropped. Sets the caller's _qsel and _w; _fstop = the first queue the
-# check did not reach (the rating then picks it or a lighter one); _fcap =
-# the shaped rate the lightest queue holds when none keeps up.
+# check did not reach or could not measure (the rating then picks it or a
+# lighter one); _fcap = the shaped rate the lightest queue holds when none
+# keeps up. Could not measure: under half the rate it ran at arrived with
+# no core busy (nodata; shaper 3.2.2.5 called that a pass). The first queue
+# not measured: the rating picks, and _w says why.
 _as_fitq() {
-	local _need=$1 _f _r _n _ok _kb _sq _dr _cap _th _rt _seen="" _lf="" _lc="" _ln="" _o="$IFS" _hf
+	local _need=$1 _f _r _n _ok _kb _sq _dr _cap _th _rt _seen="" _lf="" _lc="" _ln="" _o="$IFS" _hf _fnd=""
 	[ "$(_as_kv phase "$AS_RUN")" = "done" ] && _as_fresh || return 0
 	[ "$(_as_kv wan "$AS_RUN")" = "$AS_WAN" ] || return 0
 	# The shaped rate the check ran at.
@@ -2047,7 +2068,7 @@ _as_fitq() {
 		_r=$(_as_kv "fit_$_f" "$AS_RUN")
 		case "$_r" in
 			missing) continue ;;
-			pass,*|fail,*) ;;
+			pass,*|fail,*|nodata,*) ;;
 			*) [ -n "$_seen" ] && _fstop=$_f; break ;;
 		esac
 		case "$-" in *f*) _hf=1 ;; *) _hf=0 ;; esac
@@ -2056,8 +2077,14 @@ _as_fitq() {
 		set -- $_r
 		IFS=$_o; [ "$_hf" = 1 ] || set +f
 		_ok=$1; _kb=$2; _sq=$3; _dr=$4
-		if ! { _isnum "$_kb" && _isnum "$_sq" && _isnum "$_dr" && [ "$_kb" -gt 0 ]; }; then
+		if ! { _isnum "$_kb" && _isnum "$_sq" && _isnum "$_dr"; }; then
 			[ -n "$_seen" ] && _fstop=$_f
+			break
+		fi
+		if [ "$_ok" = nodata ] || [ "$_kb" -lt 100 ] || { [ "$_sq" -lt "$_th" ] && [ $((_kb * 2)) -lt "$_rt" ]; }; then
+			[ -n "$_seen" ] && _fstop=$_f
+			_seen="${_seen:+$_seen; }$_n could not be measured ($(_as_mbit "$_kb") of $(_as_mbit "$_rt") Mbit arrived)"
+			_fnd=1
 			break
 		fi
 		# What one core's packet work allows, scaled from what it carried
@@ -2066,8 +2093,8 @@ _as_fitq() {
 		if [ "$_dr" -gt 0 ] || [ "$_sq" -ge 100 ]; then _cap=$((_kb * _th / 100))
 		elif [ "$_sq" -gt 0 ]; then _cap=$((_kb * _th / _sq))
 		else _cap=$((_kb * _th)); fi
-		# Kept up at the shaped rate needed or a faster one: measured, not scaled.
-		[ "$_ok" = pass ] && [ "$_dr" = 0 ] && [ "$_need" -le "$_rt" ] && _cap=$_need
+		# Kept up carrying the shaped rate needed or more: measured, not scaled.
+		[ "$_ok" = pass ] && [ "$_dr" = 0 ] && [ "$_need" -le "$_kb" ] && _cap=$_need
 		if [ "$_cap" -ge "$_need" ]; then
 			_qsel=$_f
 			_w="queue check: $_n keeps up on this router (busiest core ${_sq}% packet work at $((_kb / 1000)) Mbit"
@@ -2084,9 +2111,12 @@ _as_fitq() {
 		_lf=$_f; _lc=$_cap; _ln=$_n
 	done
 	[ -n "$_seen" ] || return 0
-	if [ -n "$_fstop" ]; then
-		case "$_fstop" in hfsc) _n=HFSC ;; *) _n=HTB ;; esac
-		_w="queue check: $_seen; $_n was not checked"
+	if [ -n "$_fstop$_fnd" ]; then
+		if [ -z "$_fnd" ]; then
+			case "$_fstop" in hfsc) _n=HFSC ;; *) _n=HTB ;; esac
+			_seen="$_seen; $_n was not checked"
+		fi
+		_w="queue check: $_seen"
 	else
 		_qsel=$_lf; _fcap=$_lc
 		_w="queue check: no queue keeps up at $((_need / 1000)) Mbit on this router ($_seen): the rates are cut to what $_ln shapes"
@@ -2134,7 +2164,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	# queue the check found does not keep up.
 	_cpu="$AS_CORES cores${AS_MHZ:+ at $AS_MHZ MHz}"
 	[ "$AS_MHZ" = 0 ] && _cpu="$AS_CORES cores"
-	_qsel=""; _w=""
+	_qsel=""; _w=""; _fw=""
 	[ "$_mx" -gt 0 ] && _as_fitq $((_mx * _hr / 100))
 	if [ -z "$_qsel" ]; then
 		_fw=$_w
@@ -2171,9 +2201,9 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	fi
 	# A queue whose module is missing: HTB.
 	if [ "$_qsel" = cake ] && ! _as_kmod sch_cake; then
-		_qsel=htb; _w="the CAKE module (kmod-sched-cake) is not installed"
+		_qsel=htb; _w="${_fw:+$_fw - }the CAKE module (kmod-sched-cake) is not installed"
 	elif [ "$_qsel" = hfsc ] && ! _as_kmod sch_hfsc; then
-		_qsel=htb; _w="the HFSC module (sch_hfsc) is not installed"
+		_qsel=htb; _w="${_fw:+$_fw - }the HFSC module (sch_hfsc) is not installed"
 	fi
 	_qw=$_w
 	if [ -n "$_src" ]; then
