@@ -92,8 +92,11 @@ on the **Set up QoS-Ex** card. Pick one:
 
 1. Press **Auto Setup**. **Your router** shows what the router check found,
    and **① Line speed** runs the speed test (about 30 s; shaping stops while
-   it runs; with two lines it runs over the WAN set in **Setup**). If the
-   test cannot run, type your line speeds and press **Use these speeds**.
+   it runs; with two lines it runs over the WAN set in **Setup**). It also
+   checks which queue this router can run at your line's speed: CAKE first,
+   then HFSC, then HTB, a few seconds each, until one keeps up (up to about
+   20 s more). If the test cannot run, type your line speeds and press
+   **Use these speeds**.
    Cloudflare limits how many tests one address may run: after a few in a
    row it answers HTTP 429, so type your speeds or try again later.
 2. Once the line speed is known, go on to **② Devices**. Set your consoles
@@ -161,9 +164,15 @@ Add 4 for a VLAN tag (not on ADSL).
 
 | Queue | Choose it when |
 |---|---|
-| **CAKE** | You want the least to tune: one queue that also shares the line fairly between your devices. The default with Manual setup, and Auto Setup's pick for a high-end router, unless the router is not x86 and the line is faster than 500 Mbit. |
-| **HFSC** | You want the most control: six classes, with a real-time Gaming class that is always served first. Lighter on the CPU than CAKE. Auto Setup's pick for a mid-range router. |
-| **HTB** | You want the same six classes on the least CPU. Auto Setup's pick, with sfq queues, for a low-spec router. |
+| **CAKE** | You want the least to tune: one queue that also shares the line fairly between your devices. The default with Manual setup, and Auto Setup's pick whenever its queue check finds this router keeps up with CAKE at your line's speed. |
+| **HFSC** | You want the most control: six classes, with a real-time Gaming class that is always served first. Lighter on the CPU than CAKE. Auto Setup's pick when CAKE does not keep up and HFSC does. |
+| **HTB** | You want the same six classes on the least CPU. Auto Setup's pick when neither CAKE nor HFSC keeps up. |
+
+Auto Setup's queue check runs with its speed test. Without one (no speed test
+in the last hour, or a check that could not run), it picks by the router's rating:
+CAKE on a high-end router (HFSC when the router is not x86 and the line is
+faster than 500 Mbit), HFSC on a mid-range one, HTB with sfq queues on a
+low-spec one.
 
 With HFSC or HTB, keep **Setup → Line → Headroom** at 90% or lower.
 
@@ -571,10 +580,12 @@ Adaptive also reads `udp_fast_pps`, `udp_fast_burst`, `udp_small_avgpkt`,
 | `test_mb` | `1500` | The speed test stops early after this many MB each way |
 | `test_url` | `http://speed.cloudflare.com` | Speed test server (Cloudflare's `__down` / `__up` endpoints); an `http://` or `https://` address |
 | `ping_host` | `1.1.1.1` | Pinged idle and during the test; a host name or address |
-| `cpu_busy_pct` | `90` | A core this busy in the test means the router, not the line, set the speed. Auto Setup then says the line may be faster, asks for its speeds and suggests a queue one step lighter than the rating's (CAKE → HFSC, HFSC → HTB); the rule set stays the rating's |
+| `cpu_busy_pct` | `90` | A core this busy in the test means the router, not the line, set the speed. Auto Setup then says the line may be faster and asks for its speeds; with no queue check it also suggests a queue one step lighter than the rating's (CAKE → HFSC, HFSC → HTB); the rule set stays the rating's |
+| `fit_check` | `1` | The queue check with the speed test: the download again through CAKE, then HFSC, then HTB, at the shaped rate, until one keeps up. `0` = off (the queue is then picked by the rating) |
+| `fit_sirq_pct` | `80` | A queue keeps up when no core reaches this % of packet work (softirq) and no packet is dropped before it (10–100). Speeds typed in are judged by scaling the check's figures to them; when no queue keeps up, HTB is suggested with the rates cut to what it shaped |
 | `low_ram_mb` | `128` | At or under this RAM the router is low-spec (as with one core or a MIPS CPU): HTB with sfq leaves, the Simple rule set, the download shaped on the LAN device (when it is the only one), a 2 s Live refresh, Ping Filter Lite and a shorter server list are suggested |
 | `small_flash_mb` | `16` | At or under this writable flash, fewer saves of the server list are suggested |
 | `high_cores` / `high_mhz` / `high_ram_mb` | `4` / `1500` / `1024` | At or over all three (or any x86 router) the router is high-end; between low and high it is mid-range. The figures are the router's own: a router sold with 1 GB reports a little under 1024 MB, and a CPU that reports no speed counts as 0, so both are mid-range |
-| `queue_low` / `queue_mid` / `queue_high` | `htb` / `hfsc` / `cake` | The queue suggested for each kind of router: `cake`, `hfsc` or `htb`. It is one step lighter (never two) after `cake_max_mbit` or `cpu_busy_pct`, and HTB is suggested instead when the queue's kernel module is missing |
-| `cake_max_mbit` | `500` | On a router that is not x86, a line faster than this many Mbit (either way) gets HFSC instead of CAKE: CAKE shapes each direction on one CPU core. `0` = off |
+| `queue_low` / `queue_mid` / `queue_high` | `htb` / `hfsc` / `cake` | The queue suggested for each kind of router when no queue check ran: `cake`, `hfsc` or `htb`. It is one step lighter (never two) after `cake_max_mbit` or `cpu_busy_pct`, never richer than a queue the check found does not keep up, and HTB is suggested instead when the queue's kernel module is missing |
+| `cake_max_mbit` | `500` | With no queue check, on a router that is not x86, a line faster than this many Mbit (either way) gets HFSC instead of CAKE: CAKE shapes each direction on one CPU core. `0` = off |
 | `rules_low` / `rules_mid` / `rules_high` | `simple` / `adaptive` / `adaptive` | The rule set suggested for each kind of router: `simple`, `advanced` or `adaptive` |
