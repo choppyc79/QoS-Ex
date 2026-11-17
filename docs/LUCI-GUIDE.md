@@ -133,8 +133,8 @@ Cortex-A55 + Cortex-A76, …), else its model.
 ### ① Line speed
 
 The speed test downloads and uploads from Cloudflare's speed servers for
-about 30 seconds (up to 1500 MB each way); when Cloudflare refuses or sends
-almost nothing, that part runs again from the nearest LibreSpeed server,
+about 30 seconds (up to 1500 MB each way); when Cloudflare refuses, cannot be
+reached or sends almost nothing, that part runs again from the nearest LibreSpeed server,
 named in step ③. Shaping and the Ping Filter are paused while it runs. With two internet lines it goes out through the WAN
 set in **Setup** (the line QoS-Ex shapes), even when the router's own
 traffic normally takes the other line. It then shows each speed against
@@ -177,11 +177,12 @@ what QoS-Ex is there to remove.
 | F | 400 ms or more |
 
 Cloudflare limits how many tests one address can run in a short time
-(HTTP 429). When it refuses, or a part of the test gets almost nothing from
-it (a download under a fiftieth of the upload too), that part runs again
-from the nearest LibreSpeed server, and the speed rows in ③ name it. If
-that fails too, the reason is shown here: type your line's speeds in Mbit
-and press **Use these speeds**, or try again later.
+(HTTP 429). When it refuses, cannot be reached (its fetches keep failing,
+even while other traffic crosses the line), or a part of the test gets
+almost nothing from it (a download under a fiftieth of the upload too),
+that part runs again from the nearest LibreSpeed server, and the speed rows
+in ③ name it. If that fails too, the reason is shown here: type your line's
+speeds in Mbit and press **Use these speeds**, or try again later.
 
 ### ② Devices
 
