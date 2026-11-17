@@ -97,10 +97,10 @@ on the **Set up QoS-Ex** card. Pick one:
    then HFSC, then HTB, a few seconds each, until one keeps up (up to about
    20 s more). If the test cannot run, type your line speeds and press
    **Use these speeds**.
-   Cloudflare limits how many tests one address may run: after a few in a
-   row it answers HTTP 429, so type your speeds or try again later. A test
-   whose download carries almost nothing (under a fiftieth of the upload)
-   gives no result either: try again in a few minutes.
+   The test runs against Cloudflare. If Cloudflare refuses (it limits how
+   many tests one address may run: HTTP 429) or sends almost nothing, that
+   part of the test runs again from the nearest LibreSpeed server, and
+   step ③ names it. If that fails too, type your speeds or try again later.
 2. Once the line speed is known, go on to **② Devices**. Set your consoles
    and gaming PCs to **Gaming** and anything that downloads a lot (a NAS, a
    TV box) to **Low priority**. Consoles are set to Gaming for you from
@@ -430,9 +430,11 @@ browser); server location lookups (new servers together to `get.geojs.io`,
 then any it cannot place one by one to `ipwho.is`, `get.geojs.io`,
 `freeipapi.com`, `ipapi.co`, then `ip-api.com` over plain HTTP, each asked
 only when the one before fails; the server's address is sent); the Auto
-Setup speed test (Cloudflare); and the update check on GitHub while the web
-app is open. Turn off lookups with `pingfilter.geoip_lookup` and the update
-check with `settings.update_check`.
+Setup speed test (Cloudflare; when Cloudflare refuses, librespeed.org's
+server list and the LibreSpeed server picked from it); and the update check
+on GitHub while the web app is open. Turn off lookups with
+`pingfilter.geoip_lookup`, LibreSpeed with `autosetup.fallback` and the
+update check with `settings.update_check`.
 
 All settings live in `/etc/config/qos-ex`. After a change with `uci`, run
 `uci commit qos-ex` and `qos-ex.sh reload`. A value out of range is
@@ -585,6 +587,9 @@ Adaptive also reads `udp_fast_pps`, `udp_fast_burst`, `udp_small_avgpkt`,
 | `test_mb` | `1500` | The speed test stops early after this many MB each way |
 | `test_url` | `http://speed.cloudflare.com` | Speed test server (Cloudflare's `__down` / `__up` endpoints); an `http://` or `https://` address |
 | `ping_host` | `1.1.1.1` | Pinged idle and during the test; a host name or address |
+| `fallback` | `1` | When the test server refuses (an HTTP error) or sends almost nothing, that part of the speed test runs again from a LibreSpeed server, over plain HTTP. `0` = off |
+| `fallback_list` | `https://librespeed.org/backend-servers/servers.php` | LibreSpeed's server list: the nearest server that sends 1 MB without redirecting is used |
+| `fallback_url` | (not set) | One LibreSpeed server to use instead of the list: the folder that holds `garbage.php` and `empty.php`, for example `http://speedtest.example.net/backend` |
 | `cpu_busy_pct` | `90` | A core this busy in the test means the router, not the line, set the speed. Auto Setup then says the line may be faster and asks for its speeds; with no queue check it also suggests a queue one step lighter than the rating's (CAKE → HFSC, HFSC → HTB); the rule set stays the rating's |
 | `fit_check` | `1` | The queue check with the speed test: the download again through CAKE, then HFSC, then HTB, at the shaped rate, until one keeps up. `0` = off (the queue is then picked by the rating) |
 | `fit_sirq_pct` | `80` | A queue keeps up when no core reaches this % of packet work (softirq) and no packet is dropped before it (10–100). Speeds typed in are judged by scaling the check's figures to them; when no queue keeps up, HTB is suggested with the rates cut to what it shaped |
