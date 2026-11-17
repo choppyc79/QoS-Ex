@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.1 · shaper 3.2.2.3**
+Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.2 · shaper 3.2.2.3**
+
+## Ping Filter 2.1.0.2
+
+- Added: a warning when the handshake listener gets no conntrack events. Another kernel module can take those events (full-cone NAT built without shared events does, after a firewall stop or restart). The Ping Filter then timed no game's first exchange, and servers that ignore ping stayed on estimates with nothing to say why. It now notices when new servers bring no events, logs it once with how to bring them back (`rmmod nf_conntrack_netlink && modprobe nf_conntrack_netlink` over SSH, or a reboot), and shows `hs_quiet=1` in its status until a new connection is heard again.
 
 ## Shaper 3.2.2.3
 
