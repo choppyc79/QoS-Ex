@@ -79,8 +79,8 @@ your devices, so one busy device cannot crowd out another.
 
 Auto Setup checks your router, measures your line, and suggests a full set
 of shaper settings for both. Nothing changes until you apply, and **System →
-Maintenance → Undo last Auto Setup** puts your old settings back, shaping on
-or off as it was. It sets up the shaper only: the Ping Filter is optional and
+Maintenance → Undo last Auto Setup** puts back the settings it changed
+(anything changed since stays), shaping on or off as it was. It sets up the shaper only: the Ping Filter is optional and
 has its own setup.
 
 The tab is there after a fresh install, after **Reset to defaults**, and
@@ -117,7 +117,7 @@ The rating decides most of what Auto Setup suggests:
 
 | Rating | Which routers | Suggested |
 |---|---|---|
-| Low-spec | One CPU core, a MIPS CPU, or 128 MB of RAM or less | HTB with sfq queues and the Simple rule set; the download shaped on the LAN device when there is only one; Live pages refreshed every 2 s; Ping Filter Lite with a smaller server list |
+| Low-spec | One CPU core, a MIPS CPU, or 128 MB of RAM or less | HTB with sfq queues and the Simple rule set; the download shaped on the LAN device when there is only one; Live pages refreshed every 2 s; Ping Filter Lite (and a smaller server list at 128 MB of RAM or less) |
 | Mid-range | Everything between the two | HFSC with fq_codel queues and the Adaptive rule set |
 | High-end | Any x86 router, or 4 or more cores at 1500 MHz or more with 1024 MB of RAM or more | CAKE with the Adaptive rule set (HFSC on a router that is not x86 when the line is faster than 500 Mbit) |
 
@@ -770,8 +770,10 @@ for forum** or **Save .txt**.
 
 **Auto Setup** — **Run Auto Setup** brings the Auto Setup tab back. Your
 settings stay as they are until you apply new ones. **Undo last Auto Setup**
-puts back the settings from before the last Apply, shaping on or off as it
-was then (off again after a first setup), and opens the Auto Setup tab again.
+puts back the settings the last Apply changed, as they were before it
+(anything changed since stays), shaping on or off as it was then (off again
+after a first setup), and opens the Auto Setup tab again. An Apply that
+changed nothing leaves the earlier one to undo.
 
 **Settings backup**:
 
