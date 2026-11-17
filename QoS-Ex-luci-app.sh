@@ -11,12 +11,12 @@
 # world-writable. Pin it before the first write.
 umask 022
 
-VERSION="1.4.0.5"
+VERSION="1.4.0.6"
 # The app's files, and the sha256 of the tarball this installer was released
 # with. tools/mkluci.sh writes the hash. Besides these files, only Leaflet
 # (the map library, install_leaflet) is installed.
 LUCI_TAR="qos-ex-luci.tar.gz"
-LUCI_TAR_SHA="4b815a3fda60eb07062eb03df95385a8d581a2305deeeafaa25e026bb5b26979"
+LUCI_TAR_SHA="5734ead8cbffb2fafe991e48a24a07e356bb64b988c1a3bbdd678f11c9057e98"
 # $VERSION is spliced into sed replacements (qos-ex.css and every view) and into
 # VTOK, which becomes part of every generated filename. A '/' would terminate
 # the s-command and an '&' would expand to the whole match, so assert the
