@@ -192,6 +192,8 @@ config autosetup 'autosetup'
 	option queue_mid 'hfsc'
 	option queue_high 'cake'
 	option cake_max_mbit '500'
+	option fit_check '1'
+	option fit_sirq_pct '80'
 	option rules_low 'simple'
 	option rules_mid 'adaptive'
 	option rules_high 'adaptive'
@@ -1276,8 +1278,10 @@ _as_kbps() {
 # True when counter $2 is $3 or more bytes past $1.
 _as_over() { awk -v a="$1" -v b="$2" -v c="$3" 'BEGIN { d = b - a; if (d < 0) d += 4294967296; exit !(d >= c) }'; }
 
-# "busy% softirq%" of the busiest core between two copies of the /proc/stat
-# cpuN lines. idle + iowait count as idle.
+# "busy% softirq% sirqmax%" between two copies of the /proc/stat cpuN lines:
+# the busiest core's load and its softirq share, then the highest softirq
+# share of any core (packet work: the core a queue runs on). idle + iowait
+# count as idle.
 _as_cpu_peak() {
 	awk -v f="$1" '
 		{ t = 0; for (i = 2; i <= NF; i++) t += $i }
@@ -1285,9 +1289,24 @@ _as_cpu_peak() {
 		($1 in T) {
 			d = t - T[$1]; if (d <= 0) next
 			b = 100 - ($5 + $6 - I[$1]) * 100 / d
-			if (b > pb) { pb = b; ps = ($8 - S[$1]) * 100 / d }
+			s = ($8 - S[$1]) * 100 / d
+			if (b > pb) { pb = b; ps = s }
+			if (s > pm) pm = s
 		}
-		END { printf "%.0f %.0f\n", pb, ps }' "$1" "$2"
+		END { printf "%.0f %.0f %.0f\n", pb, ps, pm }' "$1" "$2"
+}
+
+# Packets the kernel dropped before any queue (its per-core backlog was
+# full: the CPU did not keep up), summed over the cores of a copy of
+# /proc/net/softnet_stat: column 2, hex.
+_as_drops() {
+	local _p _d _r _n=0
+	[ -r "$1" ] || { echo 0; return 0; }
+	while read -r _p _d _r; do
+		case "$_d" in ''|*[!0-9a-fA-F]*) continue ;; esac
+		_n=$((_n + 0x$_d))
+	done < "$1"
+	echo "$_n"
 }
 
 # Average of a ping summary in ms, rounded; empty when nothing came back.
@@ -1367,6 +1386,16 @@ _as_probe() {
 	AS_BIGLITTLE=no
 	# shellcheck disable=SC2086  # one word per capacity
 	[ "$(echo $_caps | wc -w)" -gt 1 ] && AS_BIGLITTLE=yes
+	# The core type, for reports: ARM's implementer:part of each kind of core
+	# (41:d03 = Cortex-A53; big.LITTLE lists two), else the model the CPU
+	# gives (MIPS "cpu model", x86 "model name").
+	AS_CPUPART=$(awk -F': *' '
+		/^CPU implementer/ { i = $2 }
+		/^CPU part/ { p = i ":" $2; gsub(/0x/, "", p); if (!(p in s)) { s[p] = 1; o = o (o == "" ? "" : ",") p } }
+		END { print o }' /proc/cpuinfo 2>/dev/null)
+	case "$AS_CPUPART" in *[!0-9a-fA-F:,]*) AS_CPUPART="" ;; esac
+	AS_CPUMODEL=$(awk -F': *' '/^(cpu model|model name)/ { print $2; exit }' /proc/cpuinfo 2>/dev/null |
+		sed 's/[^A-Za-z0-9 ._()@-]//g' | cut -c1-48)
 	AS_MEMFREE_KB=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo 2>/dev/null)
 	_isnum "$AS_MEMFREE_KB" || AS_MEMFREE_KB=0
 	# The overlay's size and free space; 0 when there is none.
@@ -1503,7 +1532,8 @@ _as_probe() {
 # The router check's key=value lines (probe, suggest -p).
 _as_probe_out() {
 	printf '%s\n' "board=$AS_BOARD" "model=$AS_MODEL" "release=$AS_REL" "arch=$AS_ARCH" \
-		"cores=$AS_CORES" "mhz=$AS_MHZ" "biglittle=$AS_BIGLITTLE" "mem_mb=$AS_MEM_MB" \
+		"cores=$AS_CORES" "mhz=$AS_MHZ" "biglittle=$AS_BIGLITTLE" "cpu_part=$AS_CPUPART" \
+		"cpu_model=$AS_CPUMODEL" "mem_mb=$AS_MEM_MB" \
 		"flash_mb=$AS_FLASH_MB" "flash_free_mb=$AS_FLASH_FREE_MB" \
 		"wan=$AS_WAN" "wan_cfg=$AS_WAN_CFG" "wan_proto=$AS_PROTO" "wan_vlan=$AS_VLAN" "wan_port=$AS_PORT" \
 		"wan_speed=$AS_SPEED" "wan_driver=$AS_DRIVER" "wan_rxq=$AS_RXQ" "wan_txq=$AS_TXQ" \
@@ -1567,8 +1597,10 @@ autosetup_again() { _as_done 0; }
 _as_save() {
 	printf '%s\n' "phase=$AS_PHASE" "progress=${AS_PROG:-0}" "now_kbps=${AS_NOW:-0}" \
 		"down_kbps=$AS_DN" "up_kbps=$AS_UP" "ping_idle=$AS_P0" "ping_down=$AS_PD" "ping_up=$AS_PU" \
-		"cpu_down=$AS_CD" "sirq_down=$AS_SD" "cpu_up=$AS_CU" "sirq_up=$AS_SU" \
-		"limit_down=$AS_LD" "limit_up=$AS_LU" "streams=$AS_STREAMS" "secs=$AS_SECS" \
+		"cpu_down=$AS_CD" "sirq_down=$AS_SD" "sirqmax_down=$AS_MD" "drops_down=$AS_RD" \
+		"cpu_up=$AS_CU" "sirq_up=$AS_SU" "sirqmax_up=$AS_MU" "drops_up=$AS_RU" \
+		"limit_down=$AS_LD" "limit_up=$AS_LU" "fit_rate=$AS_FR" "fit_now=$AS_FN" \
+		"fit_cake=$AS_FCAKE" "fit_hfsc=$AS_FHFSC" "fit_htb=$AS_FHTB" "streams=$AS_STREAMS" "secs=$AS_SECS" \
 		"wan=$AS_WAN" "bound=${AS_BOUND:-0}" "msg=$AS_MSG" "at=$(($(_as_up100) / 100))" > "$AS_RUN.tmp" 2>/dev/null &&
 		mv -f "$AS_RUN.tmp" "$AS_RUN"
 }
@@ -1622,9 +1654,11 @@ _as_kill() {
 }
 
 # One direction ($1 = down | up). The first 2 s (slow start) are not counted,
-# then test_secs, or less once test_mb has crossed the WAN. Sets AS_KBPS,
-# AS_CPU / AS_SIRQ (busiest core), AS_PING (loaded latency) and AS_FAIL (the
-# last failed fetch's reason, empty when none failed).
+# then AS_SECS, or less once test_mb has crossed the WAN. Sets AS_KBPS,
+# AS_CPU / AS_SIRQ (busiest core), AS_SQMAX (the core with the most packet
+# work), AS_DROP (packets the kernel dropped before a queue), AS_PING (loaded
+# latency) and AS_FAIL (the last failed fetch's reason, empty when none
+# failed).
 _as_dir() {
 	local _ctr _i=0 _n=0 _bs _b0="" _now _prev _u0 _u1 _cap _pp="" _c
 	# IPv4 only: _as_bind routes the test out through AS_WAN, and IPv6 can
@@ -1649,6 +1683,7 @@ _as_dir() {
 	_u0=$(_as_up100)
 	# Replaced after the warm-up; kept when the cap ends the test inside it.
 	grep '^cpu[0-9]' /proc/stat > "$AS_TMP/cpu0"
+	cat /proc/net/softnet_stat > "$AS_TMP/sn0" 2>/dev/null
 	while [ "$_i" -lt $((AS_SECS + 2)) ]; do
 		sleep 1
 		_i=$((_i + 1))
@@ -1658,8 +1693,11 @@ _as_dir() {
 		if [ "$_i" = 2 ]; then
 			_b0=$_now; _u0=$(_as_up100)
 			grep '^cpu[0-9]' /proc/stat > "$AS_TMP/cpu0"
-			ping -q -c "$AS_SECS" -W 2 "$AS_PING_HOST" > "$AS_TMP/ping" 2>&1 &
-			_pp=$!
+			cat /proc/net/softnet_stat > "$AS_TMP/sn0" 2>/dev/null
+			# Without the lock's fd: a test stopped meanwhile must not leave it
+			# held by a ping still running (_as_end stops it as well).
+			ping -q -c "$AS_SECS" -W 2 "$AS_PING_HOST" > "$AS_TMP/ping" 2>&1 6>&- &
+			_pp=$!; AS_PP=$_pp
 		fi
 		AS_PROG=$((_i * 100 / (AS_SECS + 2)))
 		_as_save
@@ -1667,18 +1705,22 @@ _as_dir() {
 	done
 	read -r _now < "$_ctr"; _u1=$(_as_up100)
 	grep '^cpu[0-9]' /proc/stat > "$AS_TMP/cpu1"
+	cat /proc/net/softnet_stat > "$AS_TMP/sn1" 2>/dev/null
 	# A cap reached inside the warm-up: count from the start.
 	[ -n "$_b0" ] || _b0=$_bs
 	# shellcheck disable=SC2086  # a PID list
 	_as_kill $AS_PIDS
 	AS_KBPS=$(_as_kbps "$_b0" "$_now" $((_u1 - _u0)))
 	_c=$(_as_cpu_peak "$AS_TMP/cpu0" "$AS_TMP/cpu1")
-	AS_CPU=${_c% *}; AS_SIRQ=${_c#* }
+	AS_CPU=${_c%% *}; _c=${_c#* }; AS_SIRQ=${_c% *}; AS_SQMAX=${_c#* }
+	AS_DROP=$(($(_as_drops "$AS_TMP/sn1") - $(_as_drops "$AS_TMP/sn0")))
+	[ "$AS_DROP" -ge 0 ] || AS_DROP=0
 	# SIGINT: ping prints its summary (SIGTERM does not).
 	if [ -n "$_pp" ]; then
 		kill -INT "$_pp" 2>/dev/null
 		wait "$_pp" 2>/dev/null
 	fi
+	AS_PP=""
 	AS_PING=$(_as_ping "$AS_TMP/ping")
 	AS_FAIL=""; [ -s "$AS_TMP/fail" ] && read -r AS_FAIL < "$AS_TMP/fail"
 	AS_NOW=0
@@ -1736,12 +1778,102 @@ _as_unbind() {
 	AS_BOUND=""
 }
 
-# Run on exit, error or Ctrl-C: streams stopped, routing and shaping back as
-# they were.
+### Queue check: with shaping off and the line measured, the download path a
+### start builds (the WAN's ingress redirect to its IFB, the queue at the
+### shaped rate with the config's own options) carries the download again:
+### CAKE, then HFSC, then HTB, until one keeps up: no core at fit_sirq_pct
+### packet work (softirq) or over, nothing dropped before the queue. It
+### measures this router's CPU, driver and line (PPPoE, VLAN) on the
+### router's own download; forwarding's nft and NAT work is not in it.
+
+# The check's download path: queue $1 at $2 kbps (shaped) on the IFB a start
+# would use for AS_WAN, whatever download_on says (the router's own download
+# never leaves by the LAN device).
+_as_fit_build() {
+	# shellcheck disable=SC2034  # read by QoS-Ex.sh's setup_* functions
+	{ QDISC=$1; DOWNLOAD_KBPS=$2; SHAPE_UP=0; SHAPE_DN=1; DL_LAN=0; }
+	WAN=$AS_WAN; _ifb_name "$WAN"
+	_game_rate "$2"; GAME_DN=$_GG
+	AS_FITB=1
+	setup_ingress || return 1
+	case "$1" in
+		cake) setup_cake_dev ingress "$IFB" "$2" "$CAKE_NAT_ING" "$CAKE_EXTRA_I" ;;
+		*)    "setup_$1" "$IFB" "$2" "$GAME_DN" ;;
+	esac
+}
+
+# The check's download path out again (also on any exit: _as_end).
+_as_fit_clear() {
+	[ "${AS_FITB:-0}" = 1 ] || return 0
+	tc qdisc del dev "$IFB" root 2>/dev/null
+	cleanup_ingress
+	AS_FITB=0
+}
+
+# After the download half (AS_DN). Each queue's result: "pass|fail,<kbps it
+# carried>,<the busiest packet-work core %>,<packets dropped>,<ping ms>",
+# "missing" (no module), empty = not checked. The first pass ends it; a
+# queue that could not be built, or a download that failed, ends it too
+# (no more requests to the test server).
+_as_fit() {
+	local _q _r _s="$AS_SECS" _hr _kb _th
+	AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FR=""; AS_FN=""
+	[ "$(_as_num fit_check 1)" = 1 ] || return 0
+	# Another shaper on the WAN, shaping still on, or no download measured.
+	[ "$AS_FOREIGN" = no ] && [ "${_AS_NOFIT:-0}" = 0 ] && [ "${AS_DN:-0}" -ge 100 ] || return 0
+	load_config >/dev/null 2>&1 || return 0
+	_hr=$BW_HEADROOM
+	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
+	# The download as Auto Setup will suggest it (never over the port), shaped.
+	_kb=$AS_DN
+	[ "$AS_SPEED" -gt 0 ] && [ "$_kb" -gt $((AS_SPEED * 1000)) ] && _kb=$((AS_SPEED * 1000))
+	_kb=$((_kb * _hr / 100))
+	# shellcheck disable=SC2034  # read by QoS-Ex.sh's _foreign_ingress
+	{ WAN=$AS_WAN; DL_LAN=0; }
+	_ifb_name "$WAN"
+	# Another tool's download path on the WAN: left alone, nothing checked.
+	_foreign_ingress >/dev/null 2>&1 || return 0
+	_as_fit_th
+	AS_FR=$_kb; AS_PHASE=fit
+	# Half the test's time a queue (5 s at least), after the 2 s warm-up.
+	AS_SECS=$(((_s + 1) / 2)); [ "$AS_SECS" -lt 5 ] && AS_SECS=5
+	for _q in cake hfsc htb; do
+		_r=""
+		if ! _as_kmod "sch_$_q"; then
+			_r=missing
+		else
+			AS_FN=$_q; AS_PROG=0; AS_NOW=0; _as_save
+			msg "speed test: queue check - $_q on $IFB at $(_as_mbit "$_kb") Mbit"
+			if _as_fit_build "$_q" "$_kb" >/dev/null 2>&1; then
+				_as_dir down
+				_as_fit_clear
+				if [ "$AS_KBPS" -ge 100 ]; then
+					if [ "$AS_DROP" -gt 0 ] || [ "$AS_SQMAX" -ge "$_th" ]; then _r=fail; else _r=pass; fi
+					msg "speed test: queue check - $_q $_r: $(_as_mbit "$AS_KBPS") Mbit, busiest core ${AS_SQMAX}% packet work, $AS_DROP dropped, ping ${AS_PING:-?} ms"
+					_r="$_r,$AS_KBPS,$AS_SQMAX,$AS_DROP,$AS_PING"
+				else
+					msg "speed test: queue check - $_q: the download failed${AS_FAIL:+ ($AS_FAIL)}"
+				fi
+			else
+				_as_fit_clear
+				msg "speed test: queue check - $_q could not be set up"
+			fi
+		fi
+		case "$_q" in cake) AS_FCAKE=$_r ;; hfsc) AS_FHFSC=$_r ;; *) AS_FHTB=$_r ;; esac
+		case "$_r" in fail,*|missing) ;; *) break ;; esac
+	done
+	AS_FN=""; AS_SECS=$_s
+}
+
+# Run on exit, error or Ctrl-C: streams stopped, the queue check's path
+# gone, routing and shaping back as they were.
 _as_end() {
 	trap - EXIT INT TERM
 	# shellcheck disable=SC2086  # a PID list
 	[ -n "$AS_PIDS" ] && _as_kill $AS_PIDS
+	[ -n "${AS_PP:-}" ] && kill "$AS_PP" 2>/dev/null
+	AS_PP=""
+	_as_fit_clear
 	[ -n "$AS_TMP" ] && rm -rf "$AS_TMP"
 	AS_TMP=""
 	_as_unbind
@@ -1789,7 +1921,9 @@ autosetup_speedtest() {
 	AS_PHASE=start; AS_PROG=0; AS_NOW=0; AS_MSG=""; AS_PIDS=""; AS_BOUND=""
 	AS_DN=""; AS_UP=""; AS_P0=""; AS_PD=""; AS_PU=""
 	AS_CD=""; AS_SD=""; AS_CU=""; AS_SU=""; AS_LD=""; AS_LU=""
-	_AS_WAS=0
+	AS_MD=""; AS_RD=""; AS_MU=""; AS_RU=""
+	AS_FR=""; AS_FN=""; AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FITB=0
+	_AS_WAS=0; _AS_NOFIT=0
 	trap '_as_end' EXIT
 	trap 'exit 1' INT TERM
 	# A closed SSH session must not end the test with shaping off.
@@ -1807,17 +1941,22 @@ autosetup_speedtest() {
 	if [ -f /var/run/qos-ex-started ]; then
 		msg "speed test: shaping stopped for the test, started again after"
 		_AS_WAS=1
-		stop 6>&- >/dev/null 2>&1 || AS_MSG="shaping did not stop - the result may be the shaped rate"
+		stop 6>&- >/dev/null 2>&1 || { _AS_NOFIT=1; AS_MSG="shaping did not stop - the result may be the shaped rate"; }
 	fi
 	ping -q -c 5 -W 2 "$AS_PING_HOST" > "$AS_TMP/ping" 2>&1
 	AS_P0=$(_as_ping "$AS_TMP/ping")
 	msg "speed test: download${AS_BOUND:+ through $AS_WAN}, $AS_STREAMS streams, ${AS_SECS} s ($AS_URL)"
+	AS_PHASE=down
 	_as_dir down
 	AS_DN=$AS_KBPS; AS_CD=$AS_CPU; AS_SD=$AS_SIRQ; AS_PD=$AS_PING; AS_FD=$AS_FAIL
+	AS_MD=$AS_SQMAX; AS_RD=$AS_DROP
 	AS_LD=$(_as_limit "$AS_DN" "$AS_CD")
+	_as_fit
 	msg "speed test: upload"
+	AS_PHASE=up
 	_as_dir up
 	AS_UP=$AS_KBPS; AS_CU=$AS_CPU; AS_SU=$AS_SIRQ; AS_PU=$AS_PING; AS_FU=$AS_FAIL
+	AS_MU=$AS_SQMAX; AS_RU=$AS_DROP
 	AS_LU=$(_as_limit "$AS_UP" "$AS_CU")
 	AS_PHASE=done; AS_PROG=100
 	# Under 100 kbit either way: the test did not reach the server, or this
@@ -1866,8 +2005,81 @@ _as_sug() {   # $1 = key, $2 = suggested, $3 = why
 _as_note() { printf 'note|%s\n' "$1"; }
 _as_keep() { printf 'keep|%s|%s|%s\n' "$1" "$(uci -q get "$UCI_CFG.$1")" "$2"; }
 
+# fit_sirq_pct into _th: 10-100, else 80.
+_as_fit_th() {
+	_th=$(_as_num fit_sirq_pct 80)
+	[ "$_th" -ge 10 ] && [ "$_th" -le 100 ] || _th=80
+}
+
+# The queue the speed test's queue check found for $1 kbps shaped (the
+# faster direction), from a fresh test on this WAN: the first of CAKE, HFSC
+# and HTB whose busiest packet-work core, scaled from the rate it carried to
+# $1 (that work grows with the rate), stays under fit_sirq_pct, with nothing
+# dropped. Sets the caller's _qsel and _w; _fstop = the first queue the
+# check did not reach (the rating then picks it or a lighter one); _fcap =
+# the shaped rate the lightest queue holds when none keeps up.
+_as_fitq() {
+	local _need=$1 _f _r _n _ok _kb _sq _dr _cap _th _rt _seen="" _lf="" _lc="" _ln="" _o="$IFS" _hf
+	[ "$(_as_kv phase "$AS_RUN")" = "done" ] && _as_fresh || return 0
+	[ "$(_as_kv wan "$AS_RUN")" = "$AS_WAN" ] || return 0
+	# The shaped rate the check ran at.
+	_rt=$(_as_kv fit_rate "$AS_RUN")
+	_isnum "$_rt" || return 0
+	_as_fit_th
+	for _f in cake hfsc htb; do
+		case "$_f" in cake) _n=CAKE ;; hfsc) _n=HFSC ;; *) _n=HTB ;; esac
+		_r=$(_as_kv "fit_$_f" "$AS_RUN")
+		case "$_r" in
+			missing) continue ;;
+			pass,*|fail,*) ;;
+			*) [ -n "$_seen" ] && _fstop=$_f; break ;;
+		esac
+		case "$-" in *f*) _hf=1 ;; *) _hf=0 ;; esac
+		IFS=,; set -f
+		# shellcheck disable=SC2086  # the result's fields
+		set -- $_r
+		IFS=$_o; [ "$_hf" = 1 ] || set +f
+		_ok=$1; _kb=$2; _sq=$3; _dr=$4
+		if ! { _isnum "$_kb" && _isnum "$_sq" && _isnum "$_dr" && [ "$_kb" -gt 0 ]; }; then
+			[ -n "$_seen" ] && _fstop=$_f
+			break
+		fi
+		# What one core's packet work allows, scaled from what it carried
+		# (the work grows with the packets). A core at its limit, or packets
+		# dropped before the queue: about what it carried.
+		if [ "$_dr" -gt 0 ] || [ "$_sq" -ge 100 ]; then _cap=$((_kb * _th / 100))
+		elif [ "$_sq" -gt 0 ]; then _cap=$((_kb * _th / _sq))
+		else _cap=$((_kb * _th)); fi
+		# Kept up at the shaped rate needed or a faster one: measured, not scaled.
+		[ "$_ok" = pass ] && [ "$_dr" = 0 ] && [ "$_need" -le "$_rt" ] && _cap=$_need
+		if [ "$_cap" -ge "$_need" ]; then
+			_qsel=$_f
+			_w="queue check: $_n keeps up on this router (busiest core ${_sq}% packet work at $((_kb / 1000)) Mbit"
+			[ "$_need" -gt "$_kb" ] && _w="$_w, about $((_sq * _need / _kb))% at $((_need / 1000))"
+			_w="$_w)${_seen:+ - $_seen}"
+			return 0
+		fi
+		if [ "$_dr" -gt 0 ]; then _r="$_n did not keep up ($_dr packets dropped at $((_kb / 1000)) Mbit)"
+		elif [ "$_ok" = pass ]; then
+			# Kept up at the rate it ran at; scaled to the one needed it is over.
+			_r="$_n kept up at $((_kb / 1000)) Mbit but would need about $((_sq * _need / _kb))% packet work at $((_need / 1000))"
+		else _r="$_n did not keep up (busiest core ${_sq}% at $((_kb / 1000)) Mbit)"; fi
+		_seen="${_seen:+$_seen; }$_r"
+		_lf=$_f; _lc=$_cap; _ln=$_n
+	done
+	[ -n "$_seen" ] || return 0
+	if [ -n "$_fstop" ]; then
+		case "$_fstop" in hfsc) _n=HFSC ;; *) _n=HTB ;; esac
+		_w="queue check: $_seen; $_n was not checked"
+	else
+		_qsel=$_lf; _fcap=$_lc
+		_w="queue check: no queue keeps up at $((_need / 1000)) Mbit on this router ($_seen): the rates are cut to what $_ln shapes"
+	fi
+}
+
 _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel _mx=0 _cm _st=0 _ln _ls
+	local _fcap="" _fstop="" _cpu _qw _l0 _fw
 	# Line rates are the line's speed: the shaper takes Headroom off them.
 	_hr=$(uci -q get "$UCI_CFG.settings.bw_headroom")
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
@@ -1890,6 +2102,64 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	elif [ -n "$AS_DSL" ] && [ "$AS_DSL_DN" -gt 0 ]; then
 		_dn=$AS_DSL_DN; _up=$AS_DSL_UP; _src="the DSL sync rate"
 	fi
+	# The faster line rate as it will be suggested (never over the WAN port):
+	# the queue is picked for it, and the rate rows follow the queue's cap.
+	for _v in "$_dn" "$_up"; do
+		if ! { _isnum "$_v" && [ "$_v" -gt 0 ]; }; then continue; fi
+		[ "$AS_SPEED" -gt 0 ] && [ "$_v" -gt $((AS_SPEED * 1000)) ] && _v=$((AS_SPEED * 1000))
+		[ "$_v" -gt "$_mx" ] && _mx=$_v
+	done
+	# Queue: what the speed test's queue check found (_as_fitq). Else the
+	# rating's (queue_<tier>: HTB on a low-spec router, HFSC on a mid-range
+	# one, CAKE on a high-end one), then one step lighter at most (CAKE ->
+	# HFSC -> HTB): CAKE on a router that is not x86 with a line faster than
+	# cake_max_mbit, or a fresh speed test that kept a core at cpu_busy_pct
+	# (it runs unshaped: shaping only adds to that). Never richer than a
+	# queue the check found does not keep up.
+	_cpu="$AS_CORES cores${AS_MHZ:+ at $AS_MHZ MHz}"
+	[ "$AS_MHZ" = 0 ] && _cpu="$AS_CORES cores"
+	_qsel=""; _w=""
+	[ "$_mx" -gt 0 ] && _as_fitq $((_mx * _hr / 100))
+	if [ -z "$_qsel" ]; then
+		_fw=$_w
+		_qsel=$(uci -q get "$UCI_CFG.autosetup.queue_$AS_TIER")
+		case "$_qsel" in
+			cake|hfsc|htb) ;;
+			*) case "$AS_TIER" in low) _qsel=htb ;; mid) _qsel=hfsc ;; *) _qsel=cake ;; esac ;;
+		esac
+		case "$_qsel" in
+			htb)  _w="$AS_TIER-spec router ($_cpu): HTB is the cheapest queue" ;;
+			hfsc) _w="$AS_TIER-spec router ($_cpu): HFSC is lighter than CAKE and has a real-time Gaming class" ;;
+			*)    _w="$AS_TIER-spec router ($_cpu): CAKE also shares the line fairly between devices" ;;
+		esac
+		# _mx: the faster line rate, 0 with none known.
+		_cm=$(_as_num cake_max_mbit 500)
+		if [ "$_qsel" = cake ] && [ "$_cm" -gt 0 ] && [ "$_mx" -gt $((_cm * 1000)) ]; then
+			case "$AS_ARCH" in
+				x86_64|i[3-6]86) ;;
+				*) _qsel=hfsc; _st=1
+				   _w="$AS_TIER-spec router ($_cpu) at $((_mx / 1000)) Mbit: above cake_max_mbit ($_cm) CAKE runs out of CPU - HFSC is lighter and keeps the real-time Gaming class" ;;
+			esac
+		fi
+		if [ "$_lim" = router ] && [ "$_st" = 0 ]; then
+			case "$_qsel" in
+				cake) _qsel=hfsc; _w="$AS_TIER-spec router ($_cpu): the speed test maxed a CPU core (${_busy}%) unshaped - HFSC is lighter than CAKE" ;;
+				hfsc) _qsel=htb;  _w="$AS_TIER-spec router ($_cpu): the speed test maxed a CPU core (${_busy}%) unshaped - HTB is lighter than HFSC" ;;
+			esac
+		fi
+		case "$_fstop$_qsel" in
+			hfsccake) _qsel=hfsc; _w="HFSC is lighter than CAKE and has a real-time Gaming class" ;;
+			htbcake|htbhfsc) _qsel=htb; _w="HTB is the cheapest queue" ;;
+		esac
+		[ -n "$_fw" ] && _w="$_fw - $_w"
+	fi
+	# A queue whose module is missing: HTB.
+	if [ "$_qsel" = cake ] && ! _as_kmod sch_cake; then
+		_qsel=htb; _w="the CAKE module (kmod-sched-cake) is not installed"
+	elif [ "$_qsel" = hfsc ] && ! _as_kmod sch_hfsc; then
+		_qsel=htb; _w="the HFSC module (sch_hfsc) is not installed"
+	fi
+	_qw=$_w
 	if [ -n "$_src" ]; then
 		for _v in "download_kbps $_dn" "upload_kbps $_up"; do
 			_q=${_v#* }
@@ -1901,7 +2171,6 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			fi
 			# Never over the WAN port's speed.
 			[ "$AS_SPEED" -gt 0 ] && [ "$_q" -gt $((AS_SPEED * 1000)) ] && _q=$((AS_SPEED * 1000))
-			[ "$_q" -gt "$_mx" ] && _mx=$_q
 			# A direction the router's CPU held back: the line may be faster.
 			_w=""
 			if [ "$_src" = "the speed test" ]; then
@@ -1912,7 +2181,13 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 					_w=""
 				fi
 			fi
-			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_q") Mbit from $_src$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
+			# No queue keeps up at the line's speed: what the lightest shapes.
+			_l0=$_q
+			if [ -n "$_fcap" ] && [ $((_q * _hr / 100)) -gt "$_fcap" ]; then
+				_q=$((_fcap * 100 / _hr))
+				_w="$_w, cut to $(_as_mbit "$_q") Mbit: this router's CPU shapes about $(_as_mbit "$_fcap") Mbit (queue check)"
+			fi
+			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_l0") Mbit from $_src$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
 		done
 	else
 		_as_note "No line speed yet: run the speed test, or give the line's download and upload speeds."
@@ -1928,46 +2203,9 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			_v=" The speed test may not have run over $AS_WAN: if its speeds look low, type them."
 		_as_note "$_ln lines have a default route ($_ls). QoS-Ex shapes $AS_WAN only: send the gaming devices out through it (an mwan3 rule or pbr).$_v"
 	fi
-	# Queue: the rating's (queue_<tier>: HTB on a low-spec router, HFSC on a
-	# mid-range one, CAKE on a high-end one), always shown, then one step
-	# lighter at most (CAKE -> HFSC -> HTB): CAKE on a router that is not x86
-	# with a line faster than cake_max_mbit, or a fresh speed test that kept a
-	# core at cpu_busy_pct (it runs unshaped: shaping only adds to that).
+	# The queue picked above, always shown.
 	_q=$(uci -q get "$UCI_CFG.settings.qdisc")
-	_v="$AS_CORES cores${AS_MHZ:+ at $AS_MHZ MHz}"
-	[ "$AS_MHZ" = 0 ] && _v="$AS_CORES cores"
-	_qsel=$(uci -q get "$UCI_CFG.autosetup.queue_$AS_TIER")
-	case "$_qsel" in
-		cake|hfsc|htb) ;;
-		*) case "$AS_TIER" in low) _qsel=htb ;; mid) _qsel=hfsc ;; *) _qsel=cake ;; esac ;;
-	esac
-	case "$_qsel" in
-		htb)  _w="$AS_TIER-spec router ($_v): HTB is the cheapest queue" ;;
-		hfsc) _w="$AS_TIER-spec router ($_v): HFSC is lighter than CAKE and has a real-time Gaming class" ;;
-		*)    _w="$AS_TIER-spec router ($_v): CAKE also shares the line fairly between devices" ;;
-	esac
-	# _mx: the faster line rate, 0 with none known.
-	_cm=$(_as_num cake_max_mbit 500)
-	if [ "$_qsel" = cake ] && [ "$_cm" -gt 0 ] && [ "$_mx" -gt $((_cm * 1000)) ]; then
-		case "$AS_ARCH" in
-			x86_64|i[3-6]86) ;;
-			*) _qsel=hfsc; _st=1
-			   _w="$AS_TIER-spec router ($_v) at $((_mx / 1000)) Mbit: above cake_max_mbit ($_cm) CAKE runs out of CPU - HFSC is lighter and keeps the real-time Gaming class" ;;
-		esac
-	fi
-	if [ "$_lim" = router ] && [ "$_st" = 0 ]; then
-		case "$_qsel" in
-			cake) _qsel=hfsc; _w="$AS_TIER-spec router ($_v): the speed test maxed a CPU core (${_busy}%) unshaped - HFSC is lighter than CAKE" ;;
-			hfsc) _qsel=htb;  _w="$AS_TIER-spec router ($_v): the speed test maxed a CPU core (${_busy}%) unshaped - HTB is lighter than HFSC" ;;
-		esac
-	fi
-	# A queue whose module is missing: HTB.
-	if [ "$_qsel" = cake ] && ! _as_kmod sch_cake; then
-		_qsel=htb; _w="the CAKE module (kmod-sched-cake) is not installed"
-	elif [ "$_qsel" = hfsc ] && ! _as_kmod sch_hfsc; then
-		_qsel=htb; _w="the HFSC module (sch_hfsc) is not installed"
-	fi
-	if [ "$_q" = "$_qsel" ]; then _as_keep settings.qdisc "$_w"; else _as_sug settings.qdisc "$_qsel" "$_w"; fi
+	if [ "$_q" = "$_qsel" ]; then _as_keep settings.qdisc "$_qw"; else _as_sug settings.qdisc "$_qsel" "$_qw"; fi
 	# Leaf queue inside the HFSC / HTB classes: sfq on a low-spec router.
 	if [ "$_qsel" != cake ]; then
 		_q=$(uci -q get "$UCI_CFG.hfsc.default_qdisc")
@@ -1987,7 +2225,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		simple|advanced|adaptive) ;;
 		*) if [ "$AS_TIER" = low ]; then _w=simple; else _w=adaptive; fi ;;
 	esac
-	_why="$AS_TIER-spec router ($_v)"
+	_why="$AS_TIER-spec router ($_cpu)"
 	if [ "$_q" = "$_w" ]; then _as_keep settings.nft_mode "$_why"
 	else _as_sug settings.nft_mode "$_w" "$_why"; fi
 	# Where the download is shaped: on the LAN device as the traffic leaves
@@ -2015,6 +2253,8 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	else _as_sug settings.live_refresh "$_w" "$_why"; fi
 	[ "$_lim" = router ] &&
 		_as_note "The router's CPU held the speed test back (busiest core ${_busy}%): the suggested line speeds are what the router managed, and the line may be faster. Shaping takes CPU too: if Live -> Stats shows drops or the ping rises, lower the rates."
+	[ -n "$_fcap" ] &&
+		_as_note "No queue keeps up with this line on this router's CPU, so the rates are set to what it shapes (about $(_as_mbit "$_fcap") Mbit). Shaped any faster, the queue builds before QoS-Ex and the ping rises under load."
 	# Overhead: the bytes each packet carries on the wire besides IP
 	# (tc-cake: ethernet 38, bridged-ptm 22; ATM 44 when the encapsulation is
 	# unknown); PPPoE adds 8, a VLAN tag 4.
@@ -2032,7 +2272,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	# Small routers: Ping Filter Lite, a shorter server list, fewer flash writes.
 	if uci -q get "$UCI_CFG.pingfilter" >/dev/null; then
 		if [ "$AS_TIER" = low ]; then
-			_as_sug pingfilter.lite 1 "low-spec router ($_v, $AS_MEM_MB MB): ping limit or radius, no gameplay grading or Ping Catch"
+			_as_sug pingfilter.lite 1 "low-spec router ($_cpu, $AS_MEM_MB MB): ping limit or radius, no gameplay grading or Ping Catch"
 		else
 			_as_sug pingfilter.lite 0 "$AS_TIER-spec router: the full Ping Filter"
 		fi
