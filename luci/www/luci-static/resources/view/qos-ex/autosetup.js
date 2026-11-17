@@ -240,8 +240,10 @@ return view.extend({
 		}
 		view.inDn = num(_('Download, Mbit'));
 		view.inUp = num(_('Upload, Mbit'));
+		// A plain handler: LuCI's createHandlerFn turns its button back on when
+		// the handler settles, which is when the test starts, not when it ends.
 		view.btnTest = E('button', { 'class': 'btn cbi-button cbi-button-action',
-			'click': ui.createHandlerFn(view, function() { return view.runTest(false); }) }, _('Run speed test'));
+			'click': function() { view.runTest(false); } }, _('Run speed test'));
 		view.btnUse = E('button', { 'class': 'btn cbi-button',
 			'click': ui.createHandlerFn(view, function() { return view.useTyped(); }) }, _('Use these speeds'));
 		view.s1 = step(1, _('Line speed'), [
@@ -395,7 +397,7 @@ return view.extend({
 				: _('Checking which queue keeps up');
 		}
 		else if (ph === 'up') { pct = 65 + p * 0.35; txt = _('Testing upload'); }
-		else                  { pct = 3; txt = _('Starting: pausing shaping, measuring the idle ping…'); }
+		else                  { pct = 3; txt = _('Starting: pausing shaping and the Ping Filter, measuring the idle ping…'); }
 		pct = Math.min(100, Math.round(pct));
 		h.setText(P.txt, txt);
 		h.setText(P.pct, pct + '%');
@@ -403,8 +405,11 @@ return view.extend({
 		this.paintLine(s);
 	},
 
+	// While a test runs nothing is applied: an apply would start shaping
+	// under it (the router refuses one as well).
 	busy: function(on) {
 		this.btnTest.disabled = this.btnUse.disabled = !!on;
+		[ this.btnApply, this.btnSteer ].forEach(function(b) { if (b) b.disabled = !!on; });
 		this.progBox.style.display = on ? '' : 'none';
 		if (on) { dom.content(this.lineErr, []); this.paintProg({}); }
 	},
@@ -465,11 +470,14 @@ return view.extend({
 		// The queue check: up to three more downloads of half the time each.
 		var fit = uci.get('qos-ex', 'autosetup', 'fit_check') !== '0' ? 3 * (Math.max(5, Math.floor((secs + 1) / 2)) + 2) : 0;
 		if (!noAsk && !confirm(_('Run a speed test now?') + '\n\n' +
-			_('Up to about %d s, up to %d MB each way. Shaping pauses while it runs.').format(2 * secs + 10 + fit, mb))) return;
+			_('Up to about %d s, up to %d MB each way. Shaping and the Ping Filter pause while it runs.').format(2 * secs + 10 + fit, mb))) return;
+		// Off from the click: follow() keeps it off until the test ends.
+		view.btnTest.disabled = true;
 		return h.callAutosetupRun('speedtest', '').then(function(r) {
 			if (!(r && r.ok)) throw new Error((r && r.error) || '?');
 			view.follow();
 		}).catch(function(e) {
+			view.btnTest.disabled = false;
 			h.notifyErr(_('Speed test') + ': ' + ((e && e.message) || e));
 		});
 	},
@@ -499,6 +507,8 @@ return view.extend({
 			}
 			var kv = asKv(r.output);
 			view.sg = asSuggestions(r.output);
+			// Handed back on apply: the router applies only the suggestions shown.
+			view.sgAt = kv.sugg_at || '';
 			return (kv.cores ? Promise.resolve(kv) : h.rpcSafe(h.callAutosetup('probe')).then(function(p) {
 				return asKv(p.output);
 			})).then(function(pr) {
@@ -532,7 +542,7 @@ return view.extend({
 		if (view.applyErr) h.setText(view.applyErr, '');
 		return h.progressRun(what, [
 			[ _('Saving the settings'), setup ? 50 : 90, function() {
-				return h.callAutosetupRun('apply', keys).then(function(r) {
+				return h.callAutosetupRun('apply', keys + (view.sgAt ? ' at=' + view.sgAt : '')).then(function(r) {
 					if (!(r && r.ok)) throw new Error((r && r.error) || 'rc=' + ((r && r.rc) || '?'));
 				});
 			} ] ].concat(setup ? [ [ _('Starting the shaper'), 95, function() {
@@ -588,26 +598,29 @@ return view.extend({
 			kids.push(E('details', { 'class': 'qx-as-keep' }, [ E('summary', {}, _('Settings that stay (%d)').format(sg.keep.length)),
 				E('div', { 'class': 'qx-as-sets' }, sg.keep.map(row)) ]));
 		// Packet steering is a network setting: applied on its own.
+		view.btnSteer = steer ? E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': ui.createHandlerFn(view, function() {
+			if (!confirm(_('Turn packet steering on? No network restart is needed.'))) return;
+			return view.act('steering', _('Packet steering'), function() { ui.hideModal(); view.refresh(); });
+		}) }, _('Turn on')) : null;
 		if (steer) kids.push(E('div', { 'class': 'qx-as-steer' }, [
 			E('span', {}, [ _('Packet steering') + ': ' + shown(AS_STEER, steer.cur) + ' → ' + shown(AS_STEER, steer.val) + ' (' + steer.why + ')' ]),
-			E('button', { 'class': 'btn cbi-button cbi-button-action', 'click': ui.createHandlerFn(view, function() {
-				if (!confirm(_('Turn packet steering on? No network restart is needed.'))) return;
-				return view.act('steering', _('Packet steering'), function() { ui.hideModal(); view.refresh(); });
-			}) }, _('Turn on')) ]));
+			view.btnSteer ]));
 		if (sg.note.length)
 			kids.push(E('ul', { 'class': 'qos-ex-muted qx-as-notes' }, sg.note.map(function(n) { return E('li', {}, [ n ]); })));
 		// Nothing to change still completes the setup (and turns the shaper on).
 		var label = main.length ? (view.running ? _('Apply') : _('Apply and start'))
 			: (view.running ? _('Finish') : _('Finish and start'));
 		view.applyErr = E('div', { 'class': 'qos-ex-err qx-as-err' });
-		kids.push(E('div', { 'class': 'qx-as-apply' }, [
-			E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(view, function() {
-				var keys = boxes.filter(function(b) { return b.checked; }).map(function(b) { return b.qosExKey; });
-				var x = view.extra();
-				return view.act((keys.length ? keys.join(' ') : 'none') + (x ? ' ' + x : ''), _('Auto Setup'),
-					function() { h.menuGo([ 'overview' ]); });
-			}) }, label),
+		view.btnApply = E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(view, function() {
+			var keys = boxes.filter(function(b) { return b.checked; }).map(function(b) { return b.qosExKey; });
+			var x = view.extra();
+			return view.act((keys.length ? keys.join(' ') : 'none') + (x ? ' ' + x : ''), _('Auto Setup'),
+				function() { h.menuGo([ 'overview' ]); });
+		}) }, label);
+		kids.push(E('div', { 'class': 'qx-as-apply' }, [ view.btnApply,
 			E('span', { 'class': 'qx-sub' }, _('Undo it any time: System → Maintenance.')) ]), view.applyErr);
+		// Drawn while a test runs (the page was reloaded): not until it ends.
+		[ view.btnApply, view.btnSteer ].forEach(function(b) { if (b) b.disabled = !!view.following; });
 		dom.content(view.sgBox, kids);
 	},
 
