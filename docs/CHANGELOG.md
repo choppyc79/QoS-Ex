@@ -5,7 +5,22 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.1 · shaper 3.2.2.3**
+Current: **LuCI app 1.4.0.5 · Ping Filter 2.1.0.1 · shaper 3.2.2.4**
+
+## LuCI app 1.4.0.5
+
+- Fixed: during the **Auto Setup** speed test the progress bar stayed at "Starting" and the gauges stayed empty until the end. With shaper 3.2.2.4 the bar follows the download, the queue check and the upload, and the download gauge shows the rate as it runs.
+- Added: a line under the speed test's results with its queue check: each queue it tried at the shaped download rate, whether it kept up, the busiest core's packet work and the ping under load through it.
+- Added: **Your router** names the CPU's cores where the CPU says (Cortex-A53, Cortex-A55 + Cortex-A76, …), else its model.
+
+## Shaper 3.2.2.4
+
+- Added: **Auto Setup** checks which queue this router can run at your line's speed. After the speed test's download, with shaping still off, it builds the download path QoS-Ex uses (the IFB and the queue at the shaped rate, with your settings) and downloads again for a few seconds: CAKE first, then HFSC, then HTB, until one keeps up, meaning no CPU core reaches 80% packet work (softirq) and the kernel drops nothing before the queue. Step ③ suggests the first that keeps up, on any router: a small router on a slow line now gets CAKE when it keeps up, and a fast router keeps CAKE at a gigabit when it keeps up. When none keeps up, it suggests HTB with the speeds cut to what HTB shaped, and says so. Speeds typed in are judged by scaling the check's figures to them. It adds up to about 20 s to the speed test, and more requests to the test server.
+- Added: `autosetup.fit_check` (`1`; `0` = no queue check) and `autosetup.fit_sirq_pct` (`80`).
+- Changed: the queue by rating (`queue_low` / `queue_mid` / `queue_high`), `cake_max_mbit` and the step down after a test the CPU held back now apply only with no queue check: no speed test in the last hour, or a check that could not run. They never pick a queue the check found does not keep up.
+- Fixed: the speed test never said which half it was running, so the page could not follow it.
+- Changed: the speed test records, for each half, the core with the most packet work and the packets the kernel dropped; the router check records the CPU's core type (`cpu_part`, `cpu_model`). Both are in the debug report (**Copy for forum**).
+- Not changed: the rule set, the leaf queues, where the download is shaped and Ping Filter Lite still follow the router's rating.
 
 ## Shaper 3.2.2.3
 
