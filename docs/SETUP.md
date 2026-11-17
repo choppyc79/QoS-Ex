@@ -98,9 +98,10 @@ on the **Set up QoS-Ex** card. Pick one:
    20 s more). If the test cannot run, type your line speeds and press
    **Use these speeds**.
    The test runs against Cloudflare. If Cloudflare refuses (it limits how
-   many tests one address may run: HTTP 429) or sends almost nothing, that
-   part of the test runs again from the nearest LibreSpeed server, and
-   step ③ names it. If that fails too, type your speeds or try again later.
+   many tests one address may run: HTTP 429), cannot be reached, or sends
+   almost nothing, that part of the test runs again from the nearest
+   LibreSpeed server, and step ③ names it. If that fails too, type your
+   speeds or try again later.
 2. Once the line speed is known, go on to **② Devices**. Set your consoles
    and gaming PCs to **Gaming** and anything that downloads a lot (a NAS, a
    TV box) to **Low priority**. Consoles are set to Gaming for you from
@@ -587,7 +588,7 @@ Adaptive also reads `udp_fast_pps`, `udp_fast_burst`, `udp_small_avgpkt`,
 | `test_mb` | `1500` | The speed test stops early after this many MB each way |
 | `test_url` | `http://speed.cloudflare.com` | Speed test server (Cloudflare's `__down` / `__up` endpoints); an `http://` or `https://` address |
 | `ping_host` | `1.1.1.1` | Pinged idle and during the test; a host name or address |
-| `fallback` | `1` | When the test server refuses (an HTTP error) or sends almost nothing, that part of the speed test runs again from a LibreSpeed server, over plain HTTP. `0` = off |
+| `fallback` | `1` | When the test server refuses (an HTTP error), cannot be reached (its fetches keep failing, even with other traffic on the line) or sends almost nothing, that part of the speed test runs again from a LibreSpeed server, over plain HTTP. `0` = off |
 | `fallback_list` | `https://librespeed.org/backend-servers/servers.php` | LibreSpeed's server list: the nearest server that sends 1 MB without redirecting is used |
 | `fallback_url` | (not set) | One LibreSpeed server to use instead of the list: the folder that holds `garbage.php` and `empty.php`, for example `http://speedtest.example.net/backend` |
 | `cpu_busy_pct` | `90` | A core this busy in the test means the router, not the line, set the speed. Auto Setup then says the line may be faster and asks for its speeds; with no queue check it also suggests a queue one step lighter than the rating's (CAKE → HFSC, HFSC → HTB); the rule set stays the rating's |
