@@ -21,7 +21,7 @@
 # Software Foundation, either version 3 of the License, or (at your option)
 # any later version.  See <https://www.gnu.org/licenses/> for details.
 
-VERSION="3.2.2.3"
+VERSION="3.2.2.4"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="QoS-Ex"
@@ -753,15 +753,7 @@ load_config() {
 	# the charset ip / tc accept.
 	case "$WAN" in *[!A-Za-z0-9._-]*|'') err "wan '$WAN' is not a valid interface name"; return 1 ;; esac
 
-	# IFNAMSIZ: "ifb-$WAN" over 15 chars falls back to a hashed name, the same
-	# on every load so start / stop / status agree.
-	IFB="ifb-$WAN"
-	if [ "${#IFB}" -gt 15 ]; then
-		# echo, not printf: the newline is part of the hash, and the name is an
-		# on-disk contract (a change orphans the old IFB). WAN is charset-checked.
-		_ck=$(echo "$WAN" | _hash_short)
-		IFB="ifb${_ck}"
-	fi
+	_ifb_name "$WAN"
 	# Download on the LAN side (settings.download_on lan): the download
 	# qdisc goes on the LAN device's egress behind a clsact ctinfo filter,
 	# with no IFB and no WAN ingress redirect. $IFB names that device from
@@ -773,6 +765,20 @@ load_config() {
 		case "$LAN_DEV" in *[!A-Za-z0-9._-]*) err "lan '$LAN_DEV' is not a valid interface name"; return 1 ;; esac
 		[ -n "$LAN_DEV" ] || LAN_DEV=$(_lan_dev)
 		[ -n "$LAN_DEV" ] && IFB="$LAN_DEV"
+	fi
+}
+
+# The IFB for WAN $1, into $IFB. IFNAMSIZ: "ifb-$1" over 15 chars falls back
+# to a hashed name, the same on every load so start / stop / status (and
+# Auto Setup's queue check) agree.
+_ifb_name() {
+	local _ck
+	IFB="ifb-$1"
+	if [ "${#IFB}" -gt 15 ]; then
+		# echo, not printf: the newline is part of the hash, and the name is an
+		# on-disk contract (a change orphans the old IFB). WAN is charset-checked.
+		_ck=$(echo "$1" | _hash_short)
+		IFB="ifb${_ck}"
 	fi
 }
 
@@ -4945,9 +4951,9 @@ qos_ex_debug() {
 	# (the probe's own key names; mhz=0 = the CPU reports no speed).
 	echo "--- auto setup (router rating, last speed test) ---"
 	_as_probe 2>/dev/null
-	echo "tier=$AS_TIER cores=$AS_CORES mhz=$AS_MHZ mem_mb=$AS_MEM_MB arch=$AS_ARCH wan_speed=$AS_SPEED wan_rxq=$AS_RXQ wan_txq=$AS_TXQ packet_steering=${AS_STEER:-default}"
+	echo "tier=$AS_TIER cores=$AS_CORES mhz=$AS_MHZ mem_mb=$AS_MEM_MB arch=$AS_ARCH cpu_part=${AS_CPUPART:-none} wan_speed=$AS_SPEED wan_rxq=$AS_RXQ wan_txq=$AS_TXQ packet_steering=${AS_STEER:-default} cpu_model=${AS_CPUMODEL:-none}"
 	if [ -r "$AS_RUN" ]; then
-		grep -E '^(phase|down_kbps|up_kbps|ping_idle|ping_down|ping_up|cpu_down|sirq_down|cpu_up|sirq_up|limit_down|limit_up|streams|secs|bound)=' "$AS_RUN" | tr '\n' ' '
+		grep -E '^(phase|down_kbps|up_kbps|ping_idle|ping_down|ping_up|cpu_down|sirq_down|sirqmax_down|drops_down|cpu_up|sirq_up|sirqmax_up|drops_up|limit_down|limit_up|fit_rate|fit_cake|fit_hfsc|fit_htb|streams|secs|bound)=' "$AS_RUN" | tr '\n' ' '
 		echo
 	else
 		echo "(no speed test since boot)"
