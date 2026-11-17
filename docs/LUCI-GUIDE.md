@@ -125,7 +125,10 @@ The router's own figures count: a router sold with 1 GB of RAM reports a
 little under 1024 MB, and some CPUs report no speed, so both are rated
 mid-range. The limits, and the queue and rule set for each rating, can be
 changed in the `autosetup` section
-([SETUP.md](SETUP.md#autosetup--auto-setup)).
+([SETUP.md](SETUP.md#autosetup--auto-setup)). The queue in this table is
+the fallback: after a speed test, the queue check below picks it.
+**Your router** also names the CPU's cores where the CPU says (Cortex-A53,
+Cortex-A55 + Cortex-A76, …), else its model.
 
 ### ① Line speed
 
@@ -141,10 +144,21 @@ the WAN port's, and what held it back:
   faster;
 - **the router's CPU**: the router could not go faster, so the result may
   be under your line's speed. Step ③ says so on the speed rows: type the
-  line's speeds if you know them. The test runs with shaping off, and
-  shaping takes CPU too, so step ③ suggests a queue one step lighter than
-  your router's rating (CAKE → HFSC, HFSC → HTB). The rule set stays the
-  rating's.
+  line's speeds if you know them.
+
+Between the download and the upload, the **queue check** runs the download
+again through the queue QoS-Ex would build (the IFB and the queue at the
+shaped rate, with your settings): CAKE first, then HFSC, then HTB, a few
+seconds each, until one keeps up. A queue keeps up when no CPU core reaches
+80% packet work (softirq, `fit_sirq_pct`) and the kernel drops nothing
+before it. A line under the gauges says what each queue did, with the
+busiest core and the ping under load through it. Step ③ suggests the first
+one that kept up, whatever the router's rating; when none does, HTB, with
+the speeds cut to what HTB shaped. Speeds typed in later are judged from
+the same figures. With no check (speeds typed with no speed test in the
+last hour, or a check that could not run), the queue follows the rating
+below, one step lighter after a test the CPU held back (CAKE → HFSC, HFSC →
+HTB).
 
 **Bufferbloat, unshaped** grades how far your ping rose under load with
 shaping off, alongside the idle and loaded pings. This delay under load is
