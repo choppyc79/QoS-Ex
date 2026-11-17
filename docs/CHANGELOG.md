@@ -5,7 +5,23 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.5 · Ping Filter 2.1.0.1 · shaper 3.2.2.4**
+Current: **LuCI app 1.4.0.6 · Ping Filter 2.1.0.1 · shaper 3.2.2.5**
+
+## LuCI app 1.4.0.6
+
+- Fixed: **Apply** (or **Finish**) and packet steering's **Turn on** could be pressed while the speed test ran, which started shaping under the test. They are greyed out until it ends.
+- Fixed: **Apply** took the router's latest suggestions, even ones worked out in another window, or over an hour old. It now applies only the ones the page shows, and says to reload the page otherwise.
+- Changed: the Overview's "These settings were made on other hardware" now follows the router's own judgement (shaper 3.2.2.5), so an OpenWrt upgrade no longer raises it.
+- Changed: **Undo last Auto Setup** asks with what it does now: the settings it changed go back, anything changed since stays. The speed test says the Ping Filter pauses too.
+
+## Shaper 3.2.2.5
+
+- Fixed: **Undo last Auto Setup** put back the whole config as it was before the last apply, however long ago, so every change made since went with it: devices, the Ping Filter's home and lists, Setup. It now puts back only the settings that apply changed, with shaping on or off as before. An undo copy from an older shaper does the same for every setting Auto Setup can change.
+- Fixed: an apply (or **Finish**) that changed nothing replaced the undo copy, so the apply before it could no longer be undone. It now keeps the copy.
+- Fixed: a speed test that filled the WAN port with a busy CPU was called held by the router's CPU, with "the line may be faster", and stepped the queue down when no queue check ran. A full port is now the port's limit.
+- Fixed: the hardware Auto Setup recorded was compared to the MB of RAM, and a new kernel (an OpenWrt upgrade) changes that a little, so the Overview could say the settings were made on other hardware. RAM within 5% is now the same router.
+- Fixed: `autosetup apply` took whatever suggestions were saved last, however old, and ran during a speed test. It now refuses suggestions over an hour old and waits for a test to end. `autosetup undo` waits as well.
+- Changed: speeds typed above the WAN port's speed now say they were cut to it.
 
 ## LuCI app 1.4.0.5
 
