@@ -5,7 +5,12 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.6**
+Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.7**
+
+## Shaper 3.2.2.7
+
+- Added: a LibreSpeed server as the speed test's backup. When Cloudflare refuses (an HTTP error such as 429) or sends almost nothing, that part of the test (the download, the upload or a queue check) runs again from the nearest LibreSpeed server, and that direction stays there for the rest of the test; a download under a fiftieth of the upload runs again with its queue check. The higher of the two readings counts. The server comes from LibreSpeed's public list (the nearest that sends 1 MB over plain HTTP) or from `autosetup.fallback_url`; `autosetup.fallback 0` turns it off. Step ③ names the server on the speeds it measured, and the log, the result (`src_down`, `src_up`, `ls_server`) and **Copy for forum** say which parts ran there.
+- Added: `sh /root/qos-ex-check.sh speedfallback` (dev branch) runs the speed test with `test_url` at a closed port for that run only, so all of it comes from LibreSpeed.
 
 ## Shaper 3.2.2.6
 
