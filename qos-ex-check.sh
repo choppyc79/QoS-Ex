@@ -19,7 +19,9 @@
 #     queue     HTB for a moment, then back                  a settings change, undone; shaping off ~10 s twice
 #     update    two Update now at once                       runs the updater: installs what changed, if anything
 #     speedtest Auto Setup's speed test and queue check      shaping and the Ping Filter off about a
-#                                                            minute; traffic to Cloudflare
+#                                                            minute; traffic to Cloudflare (or LibreSpeed)
+#     speedfallback  the same with test_url at a closed      the same; test_url staged for the run
+#               port: all of it from LibreSpeed              (never committed), then reverted
 #     debug     the sanitized debug report at the end        read-only
 #
 # Each result line starts PASS, FAIL, INFO or SKIP. Everything is also saved to
@@ -136,6 +138,10 @@ shaper() {
 	v=$(uci -q get qos-ex.autosetup.fit_check) s=$(uci -q get qos-ex.autosetup.fit_sirq_pct)
 	if [ -n "$v" ] && [ -n "$s" ]; then pass "autosetup.fit_check=$v, fit_sirq_pct=$s (shaper 3.2.2.4)"
 	else fail "autosetup.fit_check / fit_sirq_pct missing (the config top-up adds them)"; fi
+	# Shaper 3.2.2.7: the LibreSpeed backup's options, with the top-up.
+	v=$(uci -q get qos-ex.autosetup.fallback) s=$(uci -q get qos-ex.autosetup.fallback_list)
+	if [ -n "$v" ] && [ -n "$s" ]; then pass "autosetup.fallback=$v, fallback_list=$s (shaper 3.2.2.7)"
+	else fail "autosetup.fallback / fallback_list missing (the config top-up adds them)"; fi
 	grep -qE '^fit_(cake|hfsc|htb)=.' /var/run/qos-ex-autosetup 2>/dev/null &&
 		info "last queue check: $(grep -E '^fit_(rate|cake|hfsc|htb)=' /var/run/qos-ex-autosetup | tr '\n' ' ')"
 	# Shaper 3.2.2.5: the undo copy names the settings the apply changed.
@@ -714,7 +720,8 @@ test_redial() {
 # The real speed test, its phases followed in its state file, then what it
 # left: shaping as before, nothing of the queue check, no routing rule.
 test_speedtest() {
-	sec "TEST speedtest: Auto Setup's speed test and queue check (shaping off about a minute)"
+	if [ -n "${SPT_NAME:-}" ]; then sec "TEST $SPT_NAME (shaping off about a minute)"
+	else sec "TEST speedtest: Auto Setup's speed test and queue check (shaping off about a minute)"; fi
 	R=/var/run/qos-ex-autosetup
 	w0=0; running && w0=1
 	W=$(st wan_live); [ -n "$W" ] || W=$(st wan)
@@ -736,7 +743,7 @@ test_speedtest() {
 	for k in down up; do
 		case " $seen " in *" $k "*) pass "the page is told the $k phase (shaper 3.2.2.4)" ;; *) fail "no $k phase in the state file" ;; esac
 	done
-	info "$(grep -E '^(down_kbps|up_kbps|cpu_down|sirq_down|sirqmax_down|drops_down|cpu_up|sirqmax_up|drops_up|limit_down|limit_up|bound|fail_down|fail_up)=' "$R" | tr '\n' ' ')"
+	info "$(grep -E '^(down_kbps|up_kbps|cpu_down|sirq_down|sirqmax_down|drops_down|cpu_up|sirqmax_up|drops_up|limit_down|limit_up|bound|fail_down|fail_up|src_down|src_up|ls_server)=' "$R" | tr '\n' ' ')"
 	if grep -q '^fail_down=' "$R"; then pass "the result keeps each direction's last fetch error (shaper 3.2.2.6)"
 	else fail "no fail_down= in the result (shaper 3.2.2.6 keeps it)"; fi
 	if [ "$(uci -q get qos-ex.autosetup.fit_check)" = 0 ]; then
@@ -768,13 +775,33 @@ test_speedtest() {
 	"$Q" autosetup suggest 2>/dev/null | grep -E '^(set|keep)\|settings\.qdisc\|' | while read -r l; do info "Auto Setup's queue: $l"; done
 }
 
+# The speed test with test_url at a closed local port, for this run only
+# (staged, never committed; reverted at the end, and by the exit trap on a
+# stop): every part must come from a LibreSpeed server (shaper 3.2.2.7).
+test_speedfallback() {
+	R=/var/run/qos-ex-autosetup
+	: > "$T/rv"
+	uci -q set qos-ex.autosetup.test_url=http://127.0.0.1:9
+	SPT_NAME="speedfallback: the speed test with test_url at a closed port"
+	test_speedtest
+	SPT_NAME=""
+	uci -q revert qos-ex.autosetup.test_url; rm -f "$T/rv"
+	if [ "$(sed -n 's/^src_down=//p' "$R")" = librespeed ] && [ "$(sed -n 's/^src_up=//p' "$R")" = librespeed ]; then
+		pass "download and upload from LibreSpeed: $(sed -n 's/^ls_server=//p' "$R") (shaper 3.2.2.7)"
+	else
+		fail "not from LibreSpeed: $(grep -E '^(phase|src_down|src_up|ls_server|msg)=' "$R" | tr '\n' ' ')"
+	fi
+	if uci -q changes qos-ex | grep -q test_url; then fail "test_url still staged: run uci revert qos-ex.autosetup.test_url"
+	else pass "test_url as it was (nothing staged)"; fi
+}
+
 main() {
 	echo "QoS-Ex check $(date '+%Y-%m-%d %H:%M:%S'), script #$(sha256sum "$0" 2>/dev/null | cut -c1-10), arguments: ${*:-none}"
 	versions; shaper; nftables; queues; dscp_restore; ef_fixes; ctmark; hook; counters; app_calls; gameflows; pingfilter; logs
 	for a in "$@"; do
 		case "$a" in
 			match) match ;;
-			reload|burst|restart|ifb|branch|redial|rules|queue|update|speedtest) "test_$a" ;;
+			reload|burst|restart|ifb|branch|redial|rules|queue|update|speedtest|speedfallback) "test_$a" ;;
 			debug) sec "Debug report (sanitized)"; cat "$T/debug" 2>/dev/null || "$Q" debug 2>&1 ;;
 			*) sec "Unknown argument: $a" ;;
 		esac
@@ -787,7 +814,7 @@ main() {
 # then renamed into place: a fixed /tmp name is anyone's to plant. A run
 # that is interrupted keeps what it had written.
 T=$(mktemp -d /tmp/qos-ex-check.XXXXXX) || { echo "mktemp failed"; exit 1; }
-trap 'mv -f "$T/report" "$OUT" 2>/dev/null; rm -rf "$T"' EXIT
+trap '[ -f "$T/rv" ] && uci -q revert qos-ex.autosetup.test_url; mv -f "$T/report" "$OUT" 2>/dev/null; rm -rf "$T"' EXIT
 trap 'exit 1' INT TERM
 main "$@" 2>&1 | tee "$T/report"
 mv -f "$T/report" "$OUT" && { echo; echo "Saved to $OUT"; }
