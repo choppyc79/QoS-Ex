@@ -65,6 +65,11 @@ var AS_GROUPS = [
 ];
 var AS_LIMIT = { line: _('the line'), port: _('the WAN port'), router: _('the router\'s CPU') };
 var TIER = { low: _('low-spec'), mid: _('mid-range'), high: _('high-end') };
+var QN = { cake: 'CAKE', hfsc: 'HFSC', htb: 'HTB' };
+// ARM cores by part number ("CPU part" in /proc/cpuinfo; Linux
+// arch/arm*/include/asm/cputype.h), when the designer is Arm (41).
+var ARM_CORE = { c05: 'A5', c07: 'A7', c08: 'A8', c09: 'A9', c0d: 'A12', c0e: 'A17', c0f: 'A15',
+	d03: 'A53', d04: 'A35', d05: 'A55', d07: 'A57', d08: 'A72', d09: 'A73', d0a: 'A75', d0b: 'A76', d0d: 'A77', d41: 'A78' };
 // The names consoles give the network (DHCP): set to Gaming when no gaming
 // device is set yet. A guess the user sees before Apply.
 var CONSOLE = /(^|[^a-z0-9])(ps[345]|playstation|xbox|nintendo|steam-?deck)/i;
@@ -109,6 +114,29 @@ function bloat(r) {
 // the router's uptime when the shim read the file, at= when it was written).
 function age(r) { return +r.now - +r.at; }
 function fresh(r) { return r.phase === 'done' && age(r) >= 0 && age(r) < 3600; }
+// The CPU's cores by name (Cortex-A55 + Cortex-A76), else the model the CPU
+// gives (MIPS, x86).
+function coreNames(pr) {
+	var n = String(pr.cpu_part || '').split(',').map(function(p) {
+		var x = p.split(':');
+		return x[0] === '41' && ARM_CORE[x[1]] ? 'Cortex-' + ARM_CORE[x[1]] : '';
+	}).filter(Boolean);
+	return n.length ? n.join(' + ') : (pr.cpu_model || '');
+}
+// The speed test's queue check: what each queue it tried did at the shaped
+// download rate (fit_<queue> = pass|fail,kbps,busiest core %,dropped,ping).
+function fitText(r) {
+	var out = [];
+	[ 'cake', 'hfsc', 'htb' ].forEach(function(q) {
+		var f = String(r['fit_' + q] || '').split(',');
+		if (f[0] !== 'pass' && f[0] !== 'fail') return;
+		var x = [ _('busiest core') + ' ' + f[2] + '%' ];
+		if (+f[3]) x.push(_('%s dropped').format(f[3]));
+		if (f[4]) x.push(_('ping %s ms').format(f[4]));
+		out.push((f[0] === 'pass' ? _('%s kept up') : _('%s did not keep up')).format(QN[q]) + ' (' + x.join(', ') + ')');
+	});
+	return out.length ? _('Queue check at %s:').format(mbit(r.fit_rate)) + ' ' + out.join(' · ') : '';
+}
 
 return view.extend({
 	load: function() {
@@ -205,6 +233,7 @@ return view.extend({
 			E('div', { 'class': 'qx-as-prog-t' }, [ view.prog.txt, view.prog.pct ]),
 			E('div', { 'class': 'qx-meter' }, view.prog.bar) ]);
 		view.lineErr = E('div');
+		view.fitBox = E('div', { 'class': 'qx-sub qx-as-lead' });
 		function num(label) {
 			return E('input', { 'type': 'number', 'min': '0', 'step': '0.1', 'class': 'cbi-input-text',
 				'placeholder': _('Mbit'), 'aria-label': label });
@@ -217,7 +246,7 @@ return view.extend({
 			'click': ui.createHandlerFn(view, function() { return view.useTyped(); }) }, _('Use these speeds'));
 		view.s1 = step(1, _('Line speed'), [
 			E('div', { 'class': 'qx-tiles qx-as-tiles' }, [ view.gd.el, view.gu.el, bloatTile ]),
-			view.progBox, view.lineErr,
+			view.fitBox, view.progBox, view.lineErr,
 			E('div', { 'class': 'qx-as-line' }, [ view.btnTest, E('span', { 'class': 'qos-ex-muted' }, _('or type them:')),
 				E('span', {}, [ '↓ ', view.inDn ]), E('span', {}, [ '↑ ', view.inUp ]), view.btnUse ]) ]);
 		view.devBox = E('div', {}, E('p', { 'class': 'qos-ex-muted' }, _('Finding devices…')));
@@ -290,7 +319,7 @@ return view.extend({
 		dom.content(rt.dev.lab, [ _('Router'), TIER[pr.tier]
 			? E('span', { 'class': 'label pf-pill qx-as-tier qx-right' }, [ TIER[pr.tier] ]) : '' ]);
 		h.setText(rt.cpu.big, pr.cores === '1' ? _('1 core') : _('%s cores').format(pr.cores));
-		h.setText(rt.cpu.sub, [ +pr.mhz ? pr.mhz + ' MHz' : '', pr.biglittle === 'yes' ? 'big.LITTLE' : '' ]
+		h.setText(rt.cpu.sub, [ coreNames(pr), +pr.mhz ? pr.mhz + ' MHz' : '', pr.biglittle === 'yes' ? 'big.LITTLE' : '' ]
 			.filter(Boolean).join(' · '));
 		h.setText(rt.mem.big, +pr.mem_mb ? size(pr.mem_mb) : '?');
 		h.setText(rt.mem.sub, +pr.flash_mb ? _('flash: %s free of %s').format(size(pr.flash_free_mb), size(pr.flash_mb)) : '');
@@ -317,7 +346,11 @@ return view.extend({
 		var dn = 0, up = 0, tdn, tup;
 		if (s) {
 			if (r.phase === 'down') { dn = +r.now_kbps || 0; tdn = _('testing…'); tup = _('next'); }
-			else if (r.phase === 'up') {
+			else if (r.phase === 'fit') {
+				// The download again, through the queue being checked.
+				dn = +r.now_kbps || 0; tup = _('next');
+				tdn = QN[r.fit_now] ? _('through %s').format(QN[r.fit_now]) : _('checking…');
+			} else if (r.phase === 'up') {
 				dn = +r.down_kbps || 0; up = +r.now_kbps || 0;
 				tdn = _('limit: %s').format(AS_LIMIT[r.limit_down] || '?'); tup = _('testing…');
 			} else tdn = tup = _('starting…');
@@ -339,6 +372,7 @@ return view.extend({
 			x[0].g.set(view.pr.cores ? x[1] / scale : 0);
 		});
 		var res = view.res, b = !s && res.phase === 'done' ? bloat(res) : null;
+		h.setText(view.fitBox, !s && res.phase === 'done' ? fitText(res) : '');
 		view.bl.grade.className = 'qx-grade' + (b ? ' ' + b.band : '');
 		h.setText(view.bl.grade, b ? b.grade : '—');
 		h.setText(view.bl.big, s ? _('Measuring…') : b ? _('%s ms idle').format(res.ping_idle) : _('Measured by the speed test'));
@@ -349,11 +383,18 @@ return view.extend({
 	},
 
 	// One bar for the whole test: start (shaping stopped, idle ping) to
-	// 10%, download to 55%, upload to 100%.
+	// 8%, download to 45%, the queue check (up to three queues, a third
+	// each) to 65%, upload to 100%.
 	paintProg: function(s) {
 		var ph = s.phase, p = +s.progress || 0, pct, txt, P = this.prog;
-		if (ph === 'down')    { pct = 10 + p * 0.45; txt = _('Testing download'); }
-		else if (ph === 'up') { pct = 55 + p * 0.45; txt = _('Testing upload'); }
+		var qi = { cake: 0, hfsc: 1, htb: 2 }[s.fit_now];
+		if (ph === 'down')    { pct = 8 + p * 0.37; txt = _('Testing download'); }
+		else if (ph === 'fit') {
+			pct = 45 + ((qi || 0) * 100 + p) / 3 * 0.2;
+			txt = qi != null ? _('Checking whether %s keeps up at %s').format(QN[s.fit_now], mbit(s.fit_rate))
+				: _('Checking which queue keeps up');
+		}
+		else if (ph === 'up') { pct = 65 + p * 0.35; txt = _('Testing upload'); }
 		else                  { pct = 3; txt = _('Starting: pausing shaping, measuring the idle ping…'); }
 		pct = Math.min(100, Math.round(pct));
 		h.setText(P.txt, txt);
@@ -421,8 +462,10 @@ return view.extend({
 		var view = this;
 		var secs = +uci.get('qos-ex', 'autosetup', 'test_secs') || 10;
 		var mb = +uci.get('qos-ex', 'autosetup', 'test_mb') || 1500;
+		// The queue check: up to three more downloads of half the time each.
+		var fit = uci.get('qos-ex', 'autosetup', 'fit_check') !== '0' ? 3 * (Math.max(5, Math.floor((secs + 1) / 2)) + 2) : 0;
 		if (!noAsk && !confirm(_('Run a speed test now?') + '\n\n' +
-			_('About %d s, up to %d MB each way. Shaping pauses while it runs.').format(2 * secs + 10, mb))) return;
+			_('Up to about %d s, up to %d MB each way. Shaping pauses while it runs.').format(2 * secs + 10 + fit, mb))) return;
 		return h.callAutosetupRun('speedtest', '').then(function(r) {
 			if (!(r && r.ok)) throw new Error((r && r.error) || '?');
 			view.follow();
