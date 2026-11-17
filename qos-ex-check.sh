@@ -138,6 +138,12 @@ shaper() {
 	else fail "autosetup.fit_check / fit_sirq_pct missing (the config top-up adds them)"; fi
 	grep -qE '^fit_(cake|hfsc|htb)=.' /var/run/qos-ex-autosetup 2>/dev/null &&
 		info "last queue check: $(grep -E '^fit_(rate|cake|hfsc|htb)=' /var/run/qos-ex-autosetup | tr '\n' ' ')"
+	# Shaper 3.2.2.5: the undo copy names the settings the apply changed.
+	if [ -f /etc/qos-ex/autosetup.bak ]; then
+		k=$(sed -n '1s/^# autosetup undo://p' /etc/qos-ex/autosetup.bak)
+		if [ -n "$k" ]; then pass "Auto Setup's undo copy names what it puts back:$k (shaper 3.2.2.5)"
+		else info "Auto Setup's undo copy is from an older shaper: undo puts back every setting Auto Setup can change"; fi
+	fi
 	[ "$(st offload_sw)$(st offload_hw)" = 00 ] && pass "flow offloading off" || fail "flow offloading on (sw=$(st offload_sw) hw=$(st offload_hw))"
 	[ "$(st ct_acct)" = 1 ] && pass "nf_conntrack_acct on" || fail "nf_conntrack_acct=$(st ct_acct)"
 	[ -z "$(st pkg_missing)" ] && pass "no package missing" || fail "packages missing: $(st pkg_missing)"
