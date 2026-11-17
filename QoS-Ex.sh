@@ -21,7 +21,7 @@
 # Software Foundation, either version 3 of the License, or (at your option)
 # any later version.  See <https://www.gnu.org/licenses/> for details.
 
-VERSION="3.2.2.6"
+VERSION="3.2.2.7"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="QoS-Ex"
@@ -4953,7 +4953,7 @@ qos_ex_debug() {
 	_as_probe 2>/dev/null
 	echo "tier=$AS_TIER cores=$AS_CORES mhz=$AS_MHZ mem_mb=$AS_MEM_MB arch=$AS_ARCH cpu_part=${AS_CPUPART:-none} wan_speed=$AS_SPEED wan_rxq=$AS_RXQ wan_txq=$AS_TXQ packet_steering=${AS_STEER:-default} cpu_model=${AS_CPUMODEL:-none}"
 	if [ -r "$AS_RUN" ]; then
-		grep -E '^(phase|down_kbps|up_kbps|ping_idle|ping_down|ping_up|cpu_down|sirq_down|sirqmax_down|drops_down|cpu_up|sirq_up|sirqmax_up|drops_up|limit_down|limit_up|fail_down|fail_up|fit_rate|fit_cake|fit_hfsc|fit_htb|streams|secs|bound)=' "$AS_RUN" | tr '\n' ' '
+		grep -E '^(phase|down_kbps|up_kbps|ping_idle|ping_down|ping_up|cpu_down|sirq_down|sirqmax_down|drops_down|cpu_up|sirq_up|sirqmax_up|drops_up|limit_down|limit_up|fail_down|fail_up|src_down|src_up|ls_server|fit_rate|fit_cake|fit_hfsc|fit_htb|streams|secs|bound)=' "$AS_RUN" | tr '\n' ' '
 		echo
 	else
 		echo "(no speed test since boot)"
