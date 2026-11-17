@@ -5,7 +5,12 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.7**
+Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.8**
+
+## Shaper 3.2.2.8
+
+- Fixed: the speed test's LibreSpeed backup did not start when the test server could not be reached while other traffic crossed the line. The fetches failed, yet the other traffic (2.4 Mbit down and 0.2 Mbit up on the router it was seen on) was over the 0.1 Mbit the test takes as almost nothing, so the test gave it as the line's speed, and its queue check passed CAKE on it. A part of the test whose fetches keep failing (three failed fetches a stream) now counts as almost nothing whatever else crossed the line: it runs again from LibreSpeed, and LibreSpeed's reading counts even when it is lower. With the backup off, or no LibreSpeed server answering, the test gives no result and says why, and a queue check whose fetches keep failing has measured nothing.
+- Added: the result keeps how many fetches failed each way (`fails_down`, `fails_up`); the log and **Copy for forum** carry them.
 
 ## Shaper 3.2.2.7
 
