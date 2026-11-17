@@ -91,8 +91,8 @@ on the **Set up QoS-Ex** card. Pick one:
 ### Auto Setup
 
 1. Press **Auto Setup**. **Your router** shows what the router check found,
-   and **① Line speed** runs the speed test (about 30 s; shaping stops while
-   it runs; with two lines it runs over the WAN set in **Setup**). It also
+   and **① Line speed** runs the speed test (about 30 s; shaping and the
+   Ping Filter pause while it runs; with two lines it runs over the WAN set in **Setup**). It also
    checks which queue this router can run at your line's speed: CAKE first,
    then HFSC, then HTB, a few seconds each, until one keeps up (up to about
    20 s more). If the test cannot run, type your line speeds and press
@@ -108,8 +108,9 @@ on the **Set up QoS-Ex** card. Pick one:
    start** when nothing needs to change). The settings are saved, the shaper
    starts, and you land on the Overview.
 
-**System → Maintenance → Undo last Auto Setup** puts the old settings back,
-shaping on or off as it was before (off again after a first setup);
+**System → Maintenance → Undo last Auto Setup** puts back the settings the
+last Auto Setup changed (anything you changed since stays), shaping on or
+off as it was before (off again after a first setup);
 **Run Auto Setup** there brings the tab back. Auto Setup sets up the shaper
 only; the Ping Filter is optional and set up on its own
 ([PINGFILTER.md](PINGFILTER.md)).
@@ -393,7 +394,7 @@ On a new install, run `qos-ex.sh enable` once instead of `reload`.
 **Auto Setup.**
 
 ```sh
-qos-ex.sh autosetup speedtest   # measure the line (shaping stops while it runs)
+qos-ex.sh autosetup speedtest   # measure the line (shaping and the Ping Filter stop while it runs)
 qos-ex.sh autosetup suggest     # list the suggested settings
 qos-ex.sh autosetup apply all dev=aa:bb:cc:dd:ee:ff
 qos-ex.sh enable
@@ -403,9 +404,10 @@ qos-ex.sh enable
 steering (`apply steering` applies that one). `dev=<MAC>` (gaming) and
 `low=<MAC>` (low priority) can be repeated; with only `dev=` / `low=` and
 no `all`, only the devices change. `apply` does not switch QoS-Ex on: that
-is `qos-ex.sh enable`. `qos-ex.sh autosetup undo` puts the
-settings back, shaping on or off as it was. `qos-ex.sh autosetup` lists
-every command.
+is `qos-ex.sh enable`. `apply` takes suggestions under an hour old and
+not while a speed test runs: run `suggest` again first. `qos-ex.sh autosetup
+undo` puts back what the last apply changed, shaping on or off as it was.
+`qos-ex.sh autosetup` lists every command.
 
 **Ping Filter.** See [PINGFILTER.md](PINGFILTER.md#7-over-ssh).
 
