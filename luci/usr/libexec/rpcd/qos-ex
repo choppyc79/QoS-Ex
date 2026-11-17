@@ -829,10 +829,24 @@ EOL
 						;;
 					apply)
 						case "$keys" in ''|*[!a-z0-9_.:=' ']*) json_err "bad keys" ;; esac
+						# The backend refuses these too; here the page gets why.
+						command -v flock >/dev/null 2>&1 && ! flock -n /var/run/qos-ex-autosetup.lock true 2>/dev/null &&
+							json_err "a speed test is running - apply once it has ended"
+						_sa=$(sed -n 's/^sugg_at=//p' /var/run/qos-ex-autosetup.sugg 2>/dev/null)
+						_u=0; read -r _u _ < /proc/uptime; _u=${_u%.*}
+						case "$_sa" in ''|*[!0-9]*) json_err "these suggestions are out of date - reload the page" ;; esac
+						[ $((_u - _sa)) -lt 3600 ] || json_err "these suggestions are over an hour old - reload the page"
+						case " $keys " in
+							*" at="*) _pa=${keys##*at=}; _pa=${_pa%% *}
+								[ "$_pa" = "$_sa" ] || json_err "the suggestions changed in another window - reload the page" ;;
+						esac
 						# shellcheck disable=SC2086  # a checked word list
 						run_bounded "$QOS_EX_BIN" autosetup apply $keys
 						;;
-					undo) run_bounded "$QOS_EX_BIN" autosetup undo ;;
+					undo)
+						command -v flock >/dev/null 2>&1 && ! flock -n /var/run/qos-ex-autosetup.lock true 2>/dev/null &&
+							json_err "a speed test is running - undo once it has ended"
+						run_bounded "$QOS_EX_BIN" autosetup undo ;;
 					skip|again) "$QOS_EX_BIN" autosetup "$verb" >/dev/null 2>&1 || rc=$? ;;
 					*) json_err "bad verb" ;;
 				esac
