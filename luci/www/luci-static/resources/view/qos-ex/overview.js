@@ -248,19 +248,20 @@ return view.extend({
 		}).catch(function() {});
 		h.callUpdateCheck(0).then(function(r) { view.upd = r || null; view.paint(); }).catch(function() {});
 		// Set up on other hardware (a config restored onto a new router),
-		// only when Auto Setup recorded the hardware. The router's own
-		// fingerprint is asked once per login (kept in this browser tab), not
-		// on every visit: each ask is a run of the backend.
-		var hwSet = uci.get('qos-ex', 'autosetup', 'hw'), hwKey = 'qosex:hw:' + (L.env.sessionid || '');
+		// only when Auto Setup recorded the hardware. The router judges it
+		// (hw_changed: RAM may move a little with a new kernel), asked once
+		// per login and recorded hardware (kept in this browser tab), not on
+		// every visit: each ask is a run of the backend.
+		var hwSet = uci.get('qos-ex', 'autosetup', 'hw'), hwKey = 'qosex:hwc:' + (L.env.sessionid || '');
 		if (hwSet) {
-			var hwNow = null;
-			try { hwNow = window.sessionStorage.getItem(hwKey); } catch (e) {}
-			(hwNow ? Promise.resolve(hwNow) : h.callAutosetup('hw').then(function(r) {
-				var m = /(^|\n)hw=([^\n]*)/.exec((r && r.output) || '');
-				if (m) try { window.sessionStorage.setItem(hwKey, m[2]); } catch (e) {}
+			var hwc = null;
+			try { hwc = JSON.parse(window.sessionStorage.getItem(hwKey) || 'null'); } catch (e) {}
+			((hwc && hwc.set === hwSet) ? Promise.resolve(hwc.c) : h.callAutosetup('hw').then(function(r) {
+				var m = /(^|\n)hw_changed=([01])/.exec((r && r.output) || '');
+				if (m) try { window.sessionStorage.setItem(hwKey, JSON.stringify({ set: hwSet, c: m[2] })); } catch (e) {}
 				return m ? m[2] : null;
-			})).then(function(now) {
-				view.hwChanged = !!now && now !== hwSet;
+			})).then(function(c) {
+				view.hwChanged = c === '1';
 				view.paint();
 			}).catch(function() {});
 		}

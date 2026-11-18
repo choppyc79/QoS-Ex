@@ -192,6 +192,10 @@ config autosetup 'autosetup'
 	option queue_mid 'hfsc'
 	option queue_high 'cake'
 	option cake_max_mbit '500'
+	option fit_check '1'
+	option fit_sirq_pct '80'
+	option fallback '1'
+	option fallback_list 'https://librespeed.org/backend-servers/servers.php'
 	option rules_low 'simple'
 	option rules_mid 'adaptive'
 	option rules_high 'adaptive'
@@ -1276,8 +1280,10 @@ _as_kbps() {
 # True when counter $2 is $3 or more bytes past $1.
 _as_over() { awk -v a="$1" -v b="$2" -v c="$3" 'BEGIN { d = b - a; if (d < 0) d += 4294967296; exit !(d >= c) }'; }
 
-# "busy% softirq%" of the busiest core between two copies of the /proc/stat
-# cpuN lines. idle + iowait count as idle.
+# "busy% softirq% sirqmax%" between two copies of the /proc/stat cpuN lines:
+# the busiest core's load and its softirq share, then the highest softirq
+# share of any core (packet work: the core a queue runs on). idle + iowait
+# count as idle.
 _as_cpu_peak() {
 	awk -v f="$1" '
 		{ t = 0; for (i = 2; i <= NF; i++) t += $i }
@@ -1285,9 +1291,24 @@ _as_cpu_peak() {
 		($1 in T) {
 			d = t - T[$1]; if (d <= 0) next
 			b = 100 - ($5 + $6 - I[$1]) * 100 / d
-			if (b > pb) { pb = b; ps = ($8 - S[$1]) * 100 / d }
+			s = ($8 - S[$1]) * 100 / d
+			if (b > pb) { pb = b; ps = s }
+			if (s > pm) pm = s
 		}
-		END { printf "%.0f %.0f\n", pb, ps }' "$1" "$2"
+		END { printf "%.0f %.0f %.0f\n", pb, ps, pm }' "$1" "$2"
+}
+
+# Packets the kernel dropped before any queue (its per-core backlog was
+# full: the CPU did not keep up), summed over the cores of a copy of
+# /proc/net/softnet_stat: column 2, hex.
+_as_drops() {
+	local _p _d _r _n=0
+	[ -r "$1" ] || { echo 0; return 0; }
+	while read -r _p _d _r; do
+		case "$_d" in ''|*[!0-9a-fA-F]*) continue ;; esac
+		_n=$((_n + 0x$_d))
+	done < "$1"
+	echo "$_n"
 }
 
 # Average of a ping summary in ms, rounded; empty when nothing came back.
@@ -1335,10 +1356,25 @@ _as_hw() {
 	AS_HW_SAVED=$(uci -q get "$UCI_CFG.autosetup.hw")
 }
 
+# True when the hardware recorded at setup (AS_HW_SAVED) is other hardware
+# than this (AS_HW): another board or core count, or RAM more than 5% off.
+# MemTotal leaves out the kernel's own size, so a new kernel (an OpenWrt
+# upgrade) moves it a little: that is not new hardware.
+_as_hw_moved() {
+	local _s _n _sb _nb _sm _nm _d
+	[ -n "$AS_HW_SAVED" ] && [ "$AS_HW_SAVED" != "$AS_HW" ] || return 1
+	_sm=${AS_HW_SAVED##*/}; _s=${AS_HW_SAVED%/*}; _sb=${_s%/*}; _s=${_s##*/}
+	_nm=${AS_HW##*/};       _n=${AS_HW%/*};       _nb=${_n%/*}; _n=${_n##*/}
+	[ "$_sb" = "$_nb" ] && [ "$_s" = "$_n" ] || return 0
+	_isnum "$_sm" && _isnum "$_nm" && [ "$_sm" -gt 0 ] || return 0
+	_d=$((_sm - _nm)); [ "$_d" -lt 0 ] && _d=$((0 - _d))
+	[ $((_d * 100)) -gt $((_sm * 5)) ]
+}
+
 # The fingerprint lines probe and hw print.
 _as_hw_lines() {
 	printf '%s\n' "hw=$AS_HW" "hw_saved=$AS_HW_SAVED" \
-		"hw_changed=$([ -n "$AS_HW_SAVED" ] && [ "$AS_HW_SAVED" != "$AS_HW" ] && echo 1 || echo 0)" \
+		"hw_changed=$(_as_hw_moved && echo 1 || echo 0)" \
 		"setup_done=$(uci -q get "$UCI_CFG.autosetup.done")" \
 		"undo=$([ -f "$AS_BAK" ] || [ -f "$AS_STEER_BAK" ] && echo 1 || echo 0)"
 }
@@ -1367,6 +1403,16 @@ _as_probe() {
 	AS_BIGLITTLE=no
 	# shellcheck disable=SC2086  # one word per capacity
 	[ "$(echo $_caps | wc -w)" -gt 1 ] && AS_BIGLITTLE=yes
+	# The core type, for reports: ARM's implementer:part of each kind of core
+	# (41:d03 = Cortex-A53; big.LITTLE lists two), else the model the CPU
+	# gives (MIPS "cpu model", x86 "model name").
+	AS_CPUPART=$(awk -F': *' '
+		/^CPU implementer/ { i = $2 }
+		/^CPU part/ { p = i ":" $2; gsub(/0x/, "", p); if (!(p in s)) { s[p] = 1; o = o (o == "" ? "" : ",") p } }
+		END { print o }' /proc/cpuinfo 2>/dev/null)
+	case "$AS_CPUPART" in *[!0-9a-fA-F:,]*) AS_CPUPART="" ;; esac
+	AS_CPUMODEL=$(awk -F': *' '/^(cpu model|model name)/ { print $2; exit }' /proc/cpuinfo 2>/dev/null |
+		sed 's/[^A-Za-z0-9 ._()@-]//g' | cut -c1-48)
 	AS_MEMFREE_KB=$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo 2>/dev/null)
 	_isnum "$AS_MEMFREE_KB" || AS_MEMFREE_KB=0
 	# The overlay's size and free space; 0 when there is none.
@@ -1503,7 +1549,8 @@ _as_probe() {
 # The router check's key=value lines (probe, suggest -p).
 _as_probe_out() {
 	printf '%s\n' "board=$AS_BOARD" "model=$AS_MODEL" "release=$AS_REL" "arch=$AS_ARCH" \
-		"cores=$AS_CORES" "mhz=$AS_MHZ" "biglittle=$AS_BIGLITTLE" "mem_mb=$AS_MEM_MB" \
+		"cores=$AS_CORES" "mhz=$AS_MHZ" "biglittle=$AS_BIGLITTLE" "cpu_part=$AS_CPUPART" \
+		"cpu_model=$AS_CPUMODEL" "mem_mb=$AS_MEM_MB" \
 		"flash_mb=$AS_FLASH_MB" "flash_free_mb=$AS_FLASH_FREE_MB" \
 		"wan=$AS_WAN" "wan_cfg=$AS_WAN_CFG" "wan_proto=$AS_PROTO" "wan_vlan=$AS_VLAN" "wan_port=$AS_PORT" \
 		"wan_speed=$AS_SPEED" "wan_driver=$AS_DRIVER" "wan_rxq=$AS_RXQ" "wan_txq=$AS_TXQ" \
@@ -1567,8 +1614,12 @@ autosetup_again() { _as_done 0; }
 _as_save() {
 	printf '%s\n' "phase=$AS_PHASE" "progress=${AS_PROG:-0}" "now_kbps=${AS_NOW:-0}" \
 		"down_kbps=$AS_DN" "up_kbps=$AS_UP" "ping_idle=$AS_P0" "ping_down=$AS_PD" "ping_up=$AS_PU" \
-		"cpu_down=$AS_CD" "sirq_down=$AS_SD" "cpu_up=$AS_CU" "sirq_up=$AS_SU" \
-		"limit_down=$AS_LD" "limit_up=$AS_LU" "streams=$AS_STREAMS" "secs=$AS_SECS" \
+		"cpu_down=$AS_CD" "sirq_down=$AS_SD" "sirqmax_down=$AS_MD" "drops_down=$AS_RD" \
+		"cpu_up=$AS_CU" "sirq_up=$AS_SU" "sirqmax_up=$AS_MU" "drops_up=$AS_RU" \
+		"limit_down=$AS_LD" "limit_up=$AS_LU" "fit_rate=$AS_FR" "fit_now=$AS_FN" \
+		"fail_down=$AS_FD" "fail_up=$AS_FU" "fails_down=${AS_FCD:-0}" "fails_up=${AS_FCU:-0}" \
+		"src_down=$AS_SDN" "src_up=$AS_SUP" "ls_server=$AS_LSN" \
+		"fit_cake=$AS_FCAKE" "fit_hfsc=$AS_FHFSC" "fit_htb=$AS_FHTB" "streams=$AS_STREAMS" "secs=$AS_SECS" \
 		"wan=$AS_WAN" "bound=${AS_BOUND:-0}" "msg=$AS_MSG" "at=$(($(_as_up100) / 100))" > "$AS_RUN.tmp" 2>/dev/null &&
 		mv -f "$AS_RUN.tmp" "$AS_RUN"
 }
@@ -1577,19 +1628,23 @@ _as_save() {
 # so the end can stop a transfer in flight. uclient-fetch holds a whole POST
 # body in RAM, so uploads repeat a small file.
 _as_stream() {   # $1 = stop file, $2 = PID file, $3.. = uclient-fetch arguments
-	local _s="$1" _p="$2"
+	local _s="$1" _p="$2" _l _r _e
+	_l="${_s%/*}/log.${_p##*.}"
 	shift 2
 	while [ ! -e "$_s" ]; do
 		# Not -q: it hides why a fetch failed (HTTP error, connection).
-		uclient-fetch -O /dev/null "$@" </dev/null >/dev/null 2>"${_s%/*}/log.${_p##*.}" &
+		uclient-fetch -O /dev/null "$@" </dev/null >/dev/null 2>"$_l" &
 		echo "$!" > "$_p"
-		# A failed fetch (no route, refused) must not spin; its reason is
-		# kept for the result. A fetch stopped at the end is not a failure.
-		if ! wait "$!"; then
-			[ -e "$_s" ] || grep -E 'error|failed|Failed|refused|reset|timed out|Cannot' "${_s%/*}/log.${_p##*.}" 2>/dev/null |
-				tail -n 1 > "${_s%/*}/fail"
-			sleep 1
-		fi
+		wait "$!" && continue
+		_e=$?
+		# A fetch stopped at the end is not a failure.
+		[ -e "$_s" ] && break
+		# Each failed fetch adds its reason to the fail file (_as_dir counts
+		# the lines); one that failed at once (no route, refused) is tried
+		# again a second later, not in a spin.
+		_r=$(grep -E 'error|failed|Failed|refused|reset|timed out|Cannot' "$_l" 2>/dev/null | tail -n 1)
+		printf '%s\n' "${_r:-uclient-fetch exited with code $_e}" >> "${_s%/*}/fail"
+		sleep 1
 	done
 }
 
@@ -1622,20 +1677,22 @@ _as_kill() {
 }
 
 # One direction ($1 = down | up). The first 2 s (slow start) are not counted,
-# then test_secs, or less once test_mb has crossed the WAN. Sets AS_KBPS,
-# AS_CPU / AS_SIRQ (busiest core), AS_PING (loaded latency) and AS_FAIL (the
-# last failed fetch's reason, empty when none failed).
+# then AS_SECS, or less once test_mb has crossed the WAN. Sets AS_KBPS,
+# AS_CPU / AS_SIRQ (busiest core), AS_SQMAX (the core with the most packet
+# work), AS_DROP (packets the kernel dropped before a queue), AS_PING (loaded
+# latency), AS_FAIL (the last failed fetch's reason, empty when none
+# failed) and AS_FCNT (how many fetches failed).
 _as_dir() {
 	local _ctr _i=0 _n=0 _bs _b0="" _now _prev _u0 _u1 _cap _pp="" _c
 	# IPv4 only: _as_bind routes the test out through AS_WAN, and IPv6 can
-	# run on another line. 90 MB a request (Cloudflare refuses 100 MB): fewer
-	# requests, and Cloudflare limits how many one address may make.
+	# run on another line. The test server's URLs, or a LibreSpeed server's
+	# once _as_ls_use has moved that direction.
 	if [ "$1" = down ]; then
 		_ctr="/sys/class/net/$AS_WAN/statistics/rx_bytes"
-		set -- -4 "$AS_URL/__down?bytes=90000000"
+		set -- -4 "$AS_DLU"
 	else
 		_ctr="/sys/class/net/$AS_WAN/statistics/tx_bytes"
-		set -- -4 --post-file="$AS_TMP/up" "$AS_URL/__up"
+		set -- -4 --post-file="$AS_TMP/up" "$AS_ULU"
 	fi
 	rm -f "$AS_TMP/stop" "$AS_TMP/ping" "$AS_TMP/fail"
 	AS_PIDS=""
@@ -1649,6 +1706,7 @@ _as_dir() {
 	_u0=$(_as_up100)
 	# Replaced after the warm-up; kept when the cap ends the test inside it.
 	grep '^cpu[0-9]' /proc/stat > "$AS_TMP/cpu0"
+	cat /proc/net/softnet_stat > "$AS_TMP/sn0" 2>/dev/null
 	while [ "$_i" -lt $((AS_SECS + 2)) ]; do
 		sleep 1
 		_i=$((_i + 1))
@@ -1658,8 +1716,11 @@ _as_dir() {
 		if [ "$_i" = 2 ]; then
 			_b0=$_now; _u0=$(_as_up100)
 			grep '^cpu[0-9]' /proc/stat > "$AS_TMP/cpu0"
-			ping -q -c "$AS_SECS" -W 2 "$AS_PING_HOST" > "$AS_TMP/ping" 2>&1 &
-			_pp=$!
+			cat /proc/net/softnet_stat > "$AS_TMP/sn0" 2>/dev/null
+			# Without the lock's fd: a test stopped meanwhile must not leave it
+			# held by a ping still running (_as_end stops it as well).
+			ping -q -c "$AS_SECS" -W 2 "$AS_PING_HOST" > "$AS_TMP/ping" 2>&1 6>&- &
+			_pp=$!; AS_PP=$_pp
 		fi
 		AS_PROG=$((_i * 100 / (AS_SECS + 2)))
 		_as_save
@@ -1667,27 +1728,36 @@ _as_dir() {
 	done
 	read -r _now < "$_ctr"; _u1=$(_as_up100)
 	grep '^cpu[0-9]' /proc/stat > "$AS_TMP/cpu1"
+	cat /proc/net/softnet_stat > "$AS_TMP/sn1" 2>/dev/null
 	# A cap reached inside the warm-up: count from the start.
 	[ -n "$_b0" ] || _b0=$_bs
 	# shellcheck disable=SC2086  # a PID list
 	_as_kill $AS_PIDS
 	AS_KBPS=$(_as_kbps "$_b0" "$_now" $((_u1 - _u0)))
 	_c=$(_as_cpu_peak "$AS_TMP/cpu0" "$AS_TMP/cpu1")
-	AS_CPU=${_c% *}; AS_SIRQ=${_c#* }
+	AS_CPU=${_c%% *}; _c=${_c#* }; AS_SIRQ=${_c% *}; AS_SQMAX=${_c#* }
+	AS_DROP=$(($(_as_drops "$AS_TMP/sn1") - $(_as_drops "$AS_TMP/sn0")))
+	[ "$AS_DROP" -ge 0 ] || AS_DROP=0
 	# SIGINT: ping prints its summary (SIGTERM does not).
 	if [ -n "$_pp" ]; then
 		kill -INT "$_pp" 2>/dev/null
 		wait "$_pp" 2>/dev/null
 	fi
+	AS_PP=""
 	AS_PING=$(_as_ping "$AS_TMP/ping")
-	AS_FAIL=""; [ -s "$AS_TMP/fail" ] && read -r AS_FAIL < "$AS_TMP/fail"
+	AS_FAIL=""; AS_FCNT=0
+	if [ -s "$AS_TMP/fail" ]; then
+		AS_FAIL=$(tail -n 1 "$AS_TMP/fail")
+		AS_FCNT=$(($(wc -l < "$AS_TMP/fail")))
+	fi
 	AS_NOW=0
 }
 
-# What held the rate: the router's CPU, the WAN port, or the line.
+# What held the rate: the WAN port, the router's CPU, or the line. A test
+# that filled the port was held by the port, however busy a core was.
 _as_limit() {   # $1 = kbps, $2 = busiest core %
-	if [ "${2:-0}" -ge "$(_as_num cpu_busy_pct 90)" ]; then echo router
-	elif [ "$AS_SPEED" -gt 0 ] && [ "$1" -ge $((AS_SPEED * 900)) ]; then echo port
+	if [ "$AS_SPEED" -gt 0 ] && [ "$1" -ge $((AS_SPEED * 900)) ]; then echo port
+	elif [ "${2:-0}" -ge "$(_as_num cpu_busy_pct 90)" ]; then echo router
 	else echo line; fi
 }
 
@@ -1704,8 +1774,9 @@ _as_ip4() {
 
 # The test out through AS_WAN, whatever line the router's own traffic takes
 # (failover by metric, load balancing, pbr): the router's own packets (iif
-# lo: LAN traffic keeps its line) to the test server ($1) and the ping host
-# ($2) follow rules before mwan3's and pbr's to table AS_RT, which holds one
+# lo: LAN traffic keeps its line) to the test server ($1) and the other
+# hosts ($2 ...: the ping host, a LibreSpeed server) follow rules before
+# mwan3's and pbr's to table AS_RT, which holds one
 # default route over the WAN. A rule on the address alone: one with ipproto
 # or a port stops matching once mwan3 marks the packet in output and the
 # kernel routes it again (measured), and the packet left by the other line
@@ -1713,16 +1784,17 @@ _as_ip4() {
 # default route, the server's name does not resolve, another tool's rule
 # uses the table, or a rule is refused.
 _as_bind() {
-	local _l _gw _a _s
+	local _l _gw _a _s _h
 	_as_unbind
 	ip -4 rule show 2>/dev/null | grep -qw "lookup $AS_RT" && return 1
 	_s=$(_as_ip4 "$1")
 	[ -n "$_s" ] || return 1
+	shift
 	_l=$(ip -4 route show table all default dev "$AS_WAN" 2>/dev/null | head -n 1)
 	[ -n "$_l" ] || return 1
 	_gw=$(printf '%s\n' "$_l" | awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')
 	ip -4 route add default ${_gw:+via "$_gw"} dev "$AS_WAN" table "$AS_RT" 2>/dev/null || return 1
-	for _a in $({ printf '%s\n' "$_s"; _as_ip4 "$2"; } | sort -u); do
+	for _a in $({ printf '%s\n' "$_s"; for _h in "$@"; do _as_ip4 "$_h"; done; } | sort -u); do
 		ip -4 rule add pref "$AS_RT" to "$_a" iif lo lookup "$AS_RT" 2>/dev/null || { _as_unbind; return 1; }
 	done
 }
@@ -1736,12 +1808,272 @@ _as_unbind() {
 	AS_BOUND=""
 }
 
-# Run on exit, error or Ctrl-C: streams stopped, routing and shaping back as
-# they were.
+### LibreSpeed: the test server (test_url, Cloudflare's) first. A part of
+### the test that gets almost nothing from it runs again from a LibreSpeed
+### server, and that direction stays there for the rest of the test.
+
+# $1 failed fetches are three a stream or more (a fetch that fails at once
+# is tried again a second later, so a server that refuses every fetch gives
+# about one a second a stream): its fetches kept failing, and what crossed
+# the WAN was other traffic, whatever the counters read.
+_as_dead() { [ "${1:-0}" -gt 0 ] && [ "$1" -ge $((AS_STREAMS * 3)) ]; }
+
+# The part just measured got almost nothing from its server: under 100
+# kbit/s, its fetches kept failing, or a fetch refused with an HTTP error
+# (429: too many tests).
+_as_bad() {
+	[ "$AS_KBPS" -lt 100 ] && return 0
+	_as_dead "$AS_FCNT" && return 0
+	case "$AS_FAIL" in *"HTTP error"*) return 0 ;; esac
+	return 1
+}
+
+# Why, for the log.
+_as_why() {
+	if _as_dead "$AS_FCNT"; then printf '%s\n' "$AS_FCNT fetches failed, the last: $AS_FAIL"
+	else printf '%s\n' "${AS_FAIL:-almost nothing}"; fi
+}
+
+# What _as_dir measured, as the download ($1 = down) or the upload, from
+# server $2 (the test server's host, or librespeed).
+_as_take() {
+	if [ "$1" = down ]; then
+		AS_DN=$AS_KBPS; AS_CD=$AS_CPU; AS_SD=$AS_SIRQ; AS_PD=$AS_PING; AS_FD=$AS_FAIL; AS_FCD=$AS_FCNT
+		AS_MD=$AS_SQMAX; AS_RD=$AS_DROP; AS_LD=$(_as_limit "$AS_DN" "$AS_CD"); AS_SDN=$2
+	else
+		AS_UP=$AS_KBPS; AS_CU=$AS_CPU; AS_SU=$AS_SIRQ; AS_PU=$AS_PING; AS_FU=$AS_FAIL; AS_FCU=$AS_FCNT
+		AS_MU=$AS_SQMAX; AS_RU=$AS_DROP; AS_LU=$(_as_limit "$AS_UP" "$AS_CU"); AS_SUP=$2
+	fi
+}
+
+# One half of the test ($1 = down | up). Almost nothing from the test
+# server: the half again from LibreSpeed (_as_ls_use). The higher of the two
+# readings counts, or LibreSpeed's when the test server's fetches kept
+# failing and LibreSpeed's did not (the test server's reading was other
+# traffic).
+_as_half() {
+	local _k _c
+	_as_dir "$1"
+	_as_take "$1" "$AS_SRVH"
+	if _as_bad && _as_ls_use "$1" "the ${1}load" "$(_as_why)"; then
+		_k=$AS_KBPS; _c=$AS_FCNT
+		_as_dir "$1"
+		if [ "$AS_KBPS" -gt "$_k" ] || { _as_dead "$_c" && ! _as_dead "$AS_FCNT"; }; then
+			_as_take "$1" librespeed
+		fi
+	fi
+	return 0
+}
+
+# One LibreSpeed server as a candidate line "index host download-URL
+# upload-URL name", plain HTTP whatever scheme the list gives; nothing when
+# the host or a path holds anything else (the list is data from the
+# internet). $1 index, $2 server, $3 / $4 download / upload paths, $5 name.
+_as_ls_add() {
+	local _b _hp _h _pa _d=${3#/} _u=${4#/} _m
+	_b=${2#https:}; _b=${_b#http:}
+	case "$_b" in //?*) ;; *) return 1 ;; esac
+	_b=${_b#//}; _hp=${_b%%/*}; _pa=${_b#"$_hp"}; _h=${_hp%:*}
+	case "$_hp" in *[!A-Za-z0-9.:-]*) return 1 ;; esac
+	case "$_h" in ''|-*|*[!A-Za-z0-9.-]*) return 1 ;; esac
+	case "$_pa/$_d/$_u" in *[!A-Za-z0-9._~/-]*) return 1 ;; esac
+	[ -n "$_d" ] && [ -n "$_u" ] || return 1
+	_m=$(printf '%s' "$5" | tr -cd 'A-Za-z0-9 ,.()&+-' | cut -c1-60)
+	_b="http://$_hp${_pa%/}"
+	printf '%s %s %s %s %s\n' "$1" "$_h" "$_b/$_d?ckSize=100" "$_b/$_u" "${_m:-$_h}"
+}
+
+# The LibreSpeed server, once a test: autosetup.fallback_url (the folder
+# that holds garbage.php and empty.php), else from fallback_list (the
+# public list): all pinged at once, then the three nearest asked in turn
+# for 1 MB; the first that sends it and does not redirect (to HTTPS: TLS
+# would cap a small router's reading at its CPU). Sets AS_LSH AS_LSDL
+# AS_LSUL AS_LSN.
+_as_ls_pick() {
+	local _f="$AS_TMP/ls" _u _n _i=0 _s _d _p _m _h _ms _pids=""
+	mkdir -p "$_f" || return 1
+	_u=$(uci -q get "$UCI_CFG.autosetup.fallback_url")
+	if [ -n "$_u" ]; then
+		_m=${_u#*://}; _m=${_m%%/*}
+		_as_ls_add 0 "$_u" garbage.php empty.php "$_m" > "$_f/c" || return 1
+	else
+		_u=$(uci -q get "$UCI_CFG.autosetup.fallback_list")
+		case "$_u" in http://*|https://*) ;; *) return 1 ;; esac
+		command -v jsonfilter >/dev/null 2>&1 || return 1
+		uclient-fetch -4 -q -T 10 -O "$_f/list" "$_u" </dev/null >/dev/null 2>&1 6>&- || return 1
+		_n=$(jsonfilter -i "$_f/list" -e '@[*].server' 2>/dev/null | wc -l)
+		: > "$_f/c"
+		while [ "$_i" -lt "$_n" ] && [ "$_i" -lt 64 ]; do
+			jsonfilter -i "$_f/list" -e "@[$_i].server" -e "@[$_i].dlURL" -e "@[$_i].ulURL" -e "@[$_i].name" > "$_f/e" 2>/dev/null
+			_s=""; _d=""; _p=""; _m=""
+			{ read -r _s; read -r _d; read -r _p; read -r _m; } < "$_f/e"
+			_as_ls_add "$_i" "$_s" "$_d" "$_p" "$_m" >> "$_f/c"
+			_i=$((_i + 1))
+		done
+	fi
+	[ -s "$_f/c" ] || return 1
+	while read -r _i _h _d _p _m; do
+		ping -q -c 2 -W 1 "$_h" > "$_f/p$_i" 2>&1 6>&- &
+		_pids="$_pids $!"
+	done < "$_f/c"
+	# shellcheck disable=SC2086  # a PID list
+	wait $_pids 2>/dev/null
+	# Nearest first, no answer last.
+	while read -r _i _h _d _p _m; do
+		_ms=$(_as_ping "$_f/p$_i")
+		echo "${_ms:-99999} $_i $_h $_d $_p $_m"
+	done < "$_f/c" | sort -n | head -n 3 > "$_f/n"
+	while read -r _ms _i _h _d _p _m; do
+		uclient-fetch -4 -T 5 -O /dev/null "${_d%\?*}?ckSize=1" </dev/null >"$_f/x" 2>&1 6>&- || continue
+		grep -q 'Redirected' "$_f/x" && continue
+		AS_LSH=$_h; AS_LSDL=$_d; AS_LSUL=$_p; AS_LSN=$_m
+		return 0
+	done < "$_f/n"
+	return 1
+}
+
+# Direction $1 (down | up) from the LibreSpeed server from now on: once a
+# test and only from the test server ($2 = what runs again, $3 = why). The
+# server is picked once (_as_ls_pick) and routed through the WAN with the
+# test server and the ping host. False with autosetup.fallback 0, or when
+# no server answers.
+_as_ls_use() {
+	case "$1" in
+		down) [ "$AS_DLU" = "$AS_LSDL" ] && return 1 ;;
+		*)    [ "$AS_ULU" = "$AS_LSUL" ] && return 1 ;;
+	esac
+	[ "$(_as_num fallback 1)" = 1 ] || return 1
+	if [ -z "$AS_LSN" ]; then
+		[ -z "$_AS_LSTRY" ] || return 1
+		_AS_LSTRY=1
+		if ! _as_ls_pick; then
+			msg "speed test: $2 from LibreSpeed: no server answered - $AS_SRVH: $3"
+			return 1
+		fi
+		[ "$AS_BOUND" = 1 ] && _as_bind "$AS_SRVH" "$AS_LSH" "$AS_PING_HOST" && AS_BOUND=1
+	fi
+	case "$1" in down) AS_DLU=$AS_LSDL ;; *) AS_ULU=$AS_LSUL ;; esac
+	msg "speed test: $2 again from LibreSpeed ($AS_LSN) - $AS_SRVH: $3"
+}
+
+### Queue check: with shaping off and the line measured, the download path a
+### start builds (the WAN's ingress redirect to its IFB, the queue at the
+### shaped rate with the config's own options) carries the download again:
+### CAKE, then HFSC, then HTB, until one keeps up: no core at fit_sirq_pct
+### packet work (softirq) or over, nothing dropped before the queue. It
+### measures this router's CPU, driver and line (PPPoE, VLAN) on the
+### router's own download; forwarding's nft and NAT work is not in it.
+
+# The check's download path: queue $1 at $2 kbps (shaped) on the IFB a start
+# would use for AS_WAN, whatever download_on says (the router's own download
+# never leaves by the LAN device).
+_as_fit_build() {
+	# shellcheck disable=SC2034  # read by QoS-Ex.sh's setup_* functions
+	{ QDISC=$1; DOWNLOAD_KBPS=$2; SHAPE_UP=0; SHAPE_DN=1; DL_LAN=0; }
+	WAN=$AS_WAN; _ifb_name "$WAN"
+	_game_rate "$2"; GAME_DN=$_GG
+	AS_FITB=1
+	setup_ingress || return 1
+	case "$1" in
+		cake) setup_cake_dev ingress "$IFB" "$2" "$CAKE_NAT_ING" "$CAKE_EXTRA_I" ;;
+		*)    "setup_$1" "$IFB" "$2" "$GAME_DN" ;;
+	esac
+}
+
+# The check's download path out again (also on any exit: _as_end).
+_as_fit_clear() {
+	[ "${AS_FITB:-0}" = 1 ] || return 0
+	tc qdisc del dev "$IFB" root 2>/dev/null
+	cleanup_ingress
+	AS_FITB=0
+}
+
+# After the download half (AS_DN). Each queue's result: "pass|fail|nodata,
+# <kbps it carried>,<the busiest packet-work core %>,<packets dropped>,
+# <ping ms>", "missing" (no module), empty = not checked. nodata: the
+# download failed (under 100 kbit/s, or its fetches kept failing), or under
+# half the rate it ran at arrived with no core busy: nothing was measured.
+# The first pass ends it; so do nodata and a queue that could not be built
+# (no more requests to the test server).
+_as_fit() {
+	local _q _r _s="$AS_SECS" _hr _kb _th _t _y
+	AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FR=""; AS_FN=""
+	[ "$(_as_num fit_check 1)" = 1 ] || return 0
+	# Another shaper on the WAN, shaping still on, or no download measured
+	# (under 100 kbit/s, or its fetches kept failing).
+	[ "$AS_FOREIGN" = no ] && [ "${_AS_NOFIT:-0}" = 0 ] && [ "${AS_DN:-0}" -ge 100 ] && ! _as_dead "$AS_FCD" || return 0
+	load_config >/dev/null 2>&1 || return 0
+	_hr=$BW_HEADROOM
+	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
+	# The download as Auto Setup will suggest it (never over the port), shaped.
+	_kb=$AS_DN
+	[ "$AS_SPEED" -gt 0 ] && [ "$_kb" -gt $((AS_SPEED * 1000)) ] && _kb=$((AS_SPEED * 1000))
+	_kb=$((_kb * _hr / 100))
+	# shellcheck disable=SC2034  # read by QoS-Ex.sh's _foreign_ingress
+	{ WAN=$AS_WAN; DL_LAN=0; }
+	_ifb_name "$WAN"
+	# Another tool's download path on the WAN: left alone, nothing checked.
+	_foreign_ingress >/dev/null 2>&1 || return 0
+	_as_fit_th
+	AS_FR=$_kb; AS_PHASE=fit
+	# Half the test's time a queue (5 s at least), after the 2 s warm-up.
+	AS_SECS=$(((_s + 1) / 2)); [ "$AS_SECS" -lt 5 ] && AS_SECS=5
+	for _q in cake hfsc htb; do
+		_r=""
+		if ! _as_kmod "sch_$_q"; then
+			_r=missing
+		else
+			AS_FN=$_q; AS_PROG=0; AS_NOW=0; _as_save
+			msg "speed test: queue check - $_q on $IFB at $(_as_mbit "$_kb") Mbit"
+			# Nothing measured from the test server: the same queue again from
+			# LibreSpeed (_as_ls_use: once a test, and only from the test server).
+			_t=""
+			while _as_fit_build "$_q" "$_kb" >/dev/null 2>&1; do
+				_as_dir down
+				_as_fit_clear
+				# Under 100 kbit/s or fetches that kept failing (the download
+				# failed), or under half the rate it ran at with no core busy:
+				# nothing measured, and the check stops. A core at fit_sirq_pct, or
+				# drops: the CPU held it.
+				if [ "$AS_KBPS" -lt 100 ] || _as_dead "$AS_FCNT"; then _r=nodata
+				elif [ "$AS_SQMAX" -ge "$_th" ]; then _r=fail
+				elif [ $((AS_KBPS * 2)) -lt "$_kb" ]; then _r=nodata
+				elif [ "$AS_DROP" -gt 0 ]; then _r=fail
+				else _r=pass; fi
+				if [ "$_r" = nodata ]; then
+					_y=$(_as_why)
+					msg "speed test: queue check - $_q could not be measured: $(_as_mbit "$AS_KBPS") of $(_as_mbit "$_kb") Mbit arrived${AS_FAIL:+ ($_y)}"
+				else
+					msg "speed test: queue check - $_q $_r: $(_as_mbit "$AS_KBPS") Mbit, busiest core ${AS_SQMAX}% packet work, $AS_DROP dropped, ping ${AS_PING:-?} ms"
+				fi
+				if [ "$_r" = nodata ] && [ -z "$_t" ] &&
+					_as_ls_use down "the queue check" "$_y"; then
+					_t=1; continue
+				fi
+				break
+			done
+			_as_fit_clear
+			if [ -n "$_r" ]; then
+				_r="$_r,$AS_KBPS,$AS_SQMAX,$AS_DROP,$AS_PING"
+			else
+				msg "speed test: queue check - $_q could not be set up"
+			fi
+		fi
+		case "$_q" in cake) AS_FCAKE=$_r ;; hfsc) AS_FHFSC=$_r ;; *) AS_FHTB=$_r ;; esac
+		case "$_r" in fail,*|missing) ;; *) break ;; esac
+	done
+	AS_FN=""; AS_SECS=$_s
+}
+
+# Run on exit, error or Ctrl-C: streams stopped, the queue check's path
+# gone, routing and shaping back as they were.
 _as_end() {
 	trap - EXIT INT TERM
 	# shellcheck disable=SC2086  # a PID list
 	[ -n "$AS_PIDS" ] && _as_kill $AS_PIDS
+	[ -n "${AS_PP:-}" ] && kill "$AS_PP" 2>/dev/null
+	AS_PP=""
+	_as_fit_clear
 	[ -n "$AS_TMP" ] && rm -rf "$AS_TMP"
 	AS_TMP=""
 	_as_unbind
@@ -1757,7 +2089,7 @@ _as_end() {
 }
 
 autosetup_speedtest() {
-	local _kb _w _h
+	local _kb _w _k
 	command -v uclient-fetch >/dev/null 2>&1 || { err "uclient-fetch not found"; return 1; }
 	if command -v flock >/dev/null 2>&1; then
 		exec 6>> "$AS_LOCK"
@@ -1773,6 +2105,10 @@ autosetup_speedtest() {
 	# reach uclient-fetch or ping as an option.
 	case "$AS_URL" in http://*|https://*) ;; *) AS_URL=http://speed.cloudflare.com ;; esac
 	AS_URL=${AS_URL%/}
+	# Its host, and its URLs: 90 MB a request (Cloudflare refuses 100 MB):
+	# fewer requests, and Cloudflare limits how many one address may make.
+	AS_SRVH=${AS_URL#*://}; AS_SRVH=${AS_SRVH%%/*}; AS_SRVH=${AS_SRVH%:*}
+	AS_DLU="$AS_URL/__down?bytes=90000000"; AS_ULU="$AS_URL/__up"
 	AS_PING_HOST=$(uci -q get "$UCI_CFG.autosetup.ping_host")
 	case "$AS_PING_HOST" in ''|-*|*[!A-Za-z0-9.:-]*) AS_PING_HOST=1.1.1.1 ;; esac
 	AS_SECS=$(_as_num test_secs 10)
@@ -1789,7 +2125,10 @@ autosetup_speedtest() {
 	AS_PHASE=start; AS_PROG=0; AS_NOW=0; AS_MSG=""; AS_PIDS=""; AS_BOUND=""
 	AS_DN=""; AS_UP=""; AS_P0=""; AS_PD=""; AS_PU=""
 	AS_CD=""; AS_SD=""; AS_CU=""; AS_SU=""; AS_LD=""; AS_LU=""
-	_AS_WAS=0
+	AS_MD=""; AS_RD=""; AS_MU=""; AS_RU=""; AS_FD=""; AS_FU=""; AS_FCD=0; AS_FCU=0; AS_FCNT=0
+	AS_FR=""; AS_FN=""; AS_FCAKE=""; AS_FHFSC=""; AS_FHTB=""; AS_FITB=0
+	AS_SDN=$AS_SRVH; AS_SUP=$AS_SRVH; AS_LSH=""; AS_LSDL=""; AS_LSUL=""; AS_LSN=""; _AS_LSTRY=""
+	_AS_WAS=0; _AS_NOFIT=0
 	trap '_as_end' EXIT
 	trap 'exit 1' INT TERM
 	# A closed SSH session must not end the test with shaping off.
@@ -1802,33 +2141,56 @@ autosetup_speedtest() {
 	fi
 	# With two lines the router's own traffic may leave by the other one: the
 	# test server (the URL's host) and the ping host go through the WAN.
-	_h=${AS_URL#*://}; _h=${_h%%/*}; _h=${_h%:*}
-	_as_bind "$_h" "$AS_PING_HOST" && AS_BOUND=1
+	_as_bind "$AS_SRVH" "$AS_PING_HOST" && AS_BOUND=1
 	if [ -f /var/run/qos-ex-started ]; then
 		msg "speed test: shaping stopped for the test, started again after"
 		_AS_WAS=1
-		stop 6>&- >/dev/null 2>&1 || AS_MSG="shaping did not stop - the result may be the shaped rate"
+		stop 6>&- >/dev/null 2>&1 || { _AS_NOFIT=1; AS_MSG="shaping did not stop - the result may be the shaped rate"; }
 	fi
 	ping -q -c 5 -W 2 "$AS_PING_HOST" > "$AS_TMP/ping" 2>&1
 	AS_P0=$(_as_ping "$AS_TMP/ping")
 	msg "speed test: download${AS_BOUND:+ through $AS_WAN}, $AS_STREAMS streams, ${AS_SECS} s ($AS_URL)"
-	_as_dir down
-	AS_DN=$AS_KBPS; AS_CD=$AS_CPU; AS_SD=$AS_SIRQ; AS_PD=$AS_PING; AS_FD=$AS_FAIL
-	AS_LD=$(_as_limit "$AS_DN" "$AS_CD")
+	AS_PHASE=down
+	_as_half down
+	_as_fit
 	msg "speed test: upload"
-	_as_dir up
-	AS_UP=$AS_KBPS; AS_CU=$AS_CPU; AS_SU=$AS_SIRQ; AS_PU=$AS_PING; AS_FU=$AS_FAIL
-	AS_LU=$(_as_limit "$AS_UP" "$AS_CU")
+	AS_PHASE=up
+	_as_half up
+	# A download under 1/50 of the upload from the test server: almost
+	# nothing arrived. The download and the queue check again from LibreSpeed.
+	if [ $((AS_DN * 50)) -lt "$AS_UP" ] && _as_ls_use down "the download" "under 1/50 of the upload"; then
+		AS_PHASE=down
+		_k=$AS_DN
+		_as_dir down
+		if [ "$AS_KBPS" -gt "$_k" ]; then
+			_as_take down librespeed
+			_as_fit
+		fi
+	fi
 	AS_PHASE=done; AS_PROG=100
 	# Under 100 kbit either way: the test did not reach the server, or this
-	# is not the device the line is on. No result rather than a wrong one.
+	# is not the device the line is on. Fetches that kept failing: what
+	# crossed the WAN was other traffic. A download under 1/50 of the upload
+	# is no line's speed either: almost nothing arrived. No result rather
+	# than a wrong one.
 	if [ "$AS_DN" -lt 100 ] || [ "$AS_UP" -lt 100 ]; then
 		AS_PHASE=error
 		_w=""
 		[ "$AS_DN" -lt 100 ] && _w="download${AS_FD:+ ($AS_FD)}"
 		[ "$AS_UP" -lt 100 ] && _w="${_w:+$_w, }upload${AS_FU:+ ($AS_FU)}"
 		AS_MSG="almost no test traffic crossed $AS_WAN: $_w (down $(_as_mbit "$AS_DN"), up $(_as_mbit "$AS_UP") Mbit) - check that $AS_URL can be reached${AS_BOUND:+ through $AS_WAN}"
-		# 429: the server limits how many tests one address may run.
+	elif _as_dead "$AS_FCD" || _as_dead "$AS_FCU"; then
+		AS_PHASE=error
+		_w=""
+		_as_dead "$AS_FCD" && _w="download: $AS_FD"
+		_as_dead "$AS_FCU" && _w="${_w:+$_w; }upload: $AS_FU"
+		AS_MSG="the test's fetches kept failing ($_w), so its reading is not the line's speed - check that $AS_URL can be reached${AS_BOUND:+ through $AS_WAN}, or type the line's speeds"
+	elif [ $((AS_DN * 50)) -lt "$AS_UP" ]; then
+		AS_PHASE=error
+		AS_MSG="the download carried almost nothing (down $(_as_mbit "$AS_DN"), up $(_as_mbit "$AS_UP") Mbit)${AS_FD:+: $AS_FD} - try again in a few minutes, or type the line's speeds"
+	fi
+	# 429: the server limits how many tests one address may run.
+	if [ "$AS_PHASE" = error ]; then
 		case "$AS_FD$AS_FU" in *"HTTP error 429"*)
 			AS_MSG="the test server is limiting tests from this address (HTTP error 429) - try again later, or type the line's speeds" ;;
 		esac
@@ -1839,6 +2201,8 @@ autosetup_speedtest() {
 	msg "speed test: download $(_as_mbit "$AS_DN") Mbit ($AS_LD limit, busiest core ${AS_CD}%), upload $(_as_mbit "$AS_UP") Mbit ($AS_LU limit, ${AS_CU}%)"
 	msg "speed test: ping ${AS_P0:-?} ms idle, ${AS_PD:-?} ms downloading, ${AS_PU:-?} ms uploading"
 	[ -z "$AS_MSG" ] || msg "speed test: $AS_MSG"
+	[ -z "$AS_FD$AS_FU" ] || msg "speed test: some fetches failed - download: ${AS_FD:+$AS_FCD, the last: }${AS_FD:-none}; upload: ${AS_FU:+$AS_FCU, the last: }${AS_FU:-none}"
+	[ -z "$AS_LSN" ] || msg "speed test: LibreSpeed server $AS_LSN - download from $AS_SDN, upload from $AS_SUP"
 	return 0
 }
 
@@ -1866,8 +2230,93 @@ _as_sug() {   # $1 = key, $2 = suggested, $3 = why
 _as_note() { printf 'note|%s\n' "$1"; }
 _as_keep() { printf 'keep|%s|%s|%s\n' "$1" "$(uci -q get "$UCI_CFG.$1")" "$2"; }
 
+# fit_sirq_pct into _th: 10-100, else 80.
+_as_fit_th() {
+	_th=$(_as_num fit_sirq_pct 80)
+	[ "$_th" -ge 10 ] && [ "$_th" -le 100 ] || _th=80
+}
+
+# The queue the speed test's queue check found for $1 kbps shaped (the
+# faster direction), from a fresh test on this WAN: the first of CAKE, HFSC
+# and HTB whose busiest packet-work core, scaled from the rate it carried to
+# $1 (that work grows with the rate), stays under fit_sirq_pct, with nothing
+# dropped. Sets the caller's _qsel and _w; _fstop = the first queue the
+# check did not reach or could not measure (the rating then picks it or a
+# lighter one); _fcap = the shaped rate the lightest queue holds when none
+# keeps up. Could not measure: under half the rate it ran at arrived with
+# no core busy (nodata; shaper 3.2.2.5 called that a pass). The first queue
+# not measured: the rating picks, and _w says why.
+_as_fitq() {
+	local _need=$1 _f _r _n _ok _kb _sq _dr _cap _th _rt _seen="" _lf="" _lc="" _ln="" _o="$IFS" _hf _fnd=""
+	[ "$(_as_kv phase "$AS_RUN")" = "done" ] && _as_fresh || return 0
+	[ "$(_as_kv wan "$AS_RUN")" = "$AS_WAN" ] || return 0
+	# The shaped rate the check ran at.
+	_rt=$(_as_kv fit_rate "$AS_RUN")
+	_isnum "$_rt" || return 0
+	_as_fit_th
+	for _f in cake hfsc htb; do
+		case "$_f" in cake) _n=CAKE ;; hfsc) _n=HFSC ;; *) _n=HTB ;; esac
+		_r=$(_as_kv "fit_$_f" "$AS_RUN")
+		case "$_r" in
+			missing) continue ;;
+			pass,*|fail,*|nodata,*) ;;
+			*) [ -n "$_seen" ] && _fstop=$_f; break ;;
+		esac
+		case "$-" in *f*) _hf=1 ;; *) _hf=0 ;; esac
+		IFS=,; set -f
+		# shellcheck disable=SC2086  # the result's fields
+		set -- $_r
+		IFS=$_o; [ "$_hf" = 1 ] || set +f
+		_ok=$1; _kb=$2; _sq=$3; _dr=$4
+		if ! { _isnum "$_kb" && _isnum "$_sq" && _isnum "$_dr"; }; then
+			[ -n "$_seen" ] && _fstop=$_f
+			break
+		fi
+		if [ "$_ok" = nodata ] || [ "$_kb" -lt 100 ] || { [ "$_sq" -lt "$_th" ] && [ $((_kb * 2)) -lt "$_rt" ]; }; then
+			[ -n "$_seen" ] && _fstop=$_f
+			_seen="${_seen:+$_seen; }$_n could not be measured ($(_as_mbit "$_kb") of $(_as_mbit "$_rt") Mbit arrived)"
+			_fnd=1
+			break
+		fi
+		# What one core's packet work allows, scaled from what it carried
+		# (the work grows with the packets). A core at its limit, or packets
+		# dropped before the queue: about what it carried.
+		if [ "$_dr" -gt 0 ] || [ "$_sq" -ge 100 ]; then _cap=$((_kb * _th / 100))
+		elif [ "$_sq" -gt 0 ]; then _cap=$((_kb * _th / _sq))
+		else _cap=$((_kb * _th)); fi
+		# Kept up carrying the shaped rate needed or more: measured, not scaled.
+		[ "$_ok" = pass ] && [ "$_dr" = 0 ] && [ "$_need" -le "$_kb" ] && _cap=$_need
+		if [ "$_cap" -ge "$_need" ]; then
+			_qsel=$_f
+			_w="queue check: $_n keeps up on this router (busiest core ${_sq}% packet work at $((_kb / 1000)) Mbit"
+			[ "$_need" -gt "$_kb" ] && _w="$_w, about $((_sq * _need / _kb))% at $((_need / 1000))"
+			_w="$_w)${_seen:+ - $_seen}"
+			return 0
+		fi
+		if [ "$_dr" -gt 0 ]; then _r="$_n did not keep up ($_dr packets dropped at $((_kb / 1000)) Mbit)"
+		elif [ "$_ok" = pass ]; then
+			# Kept up at the rate it ran at; scaled to the one needed it is over.
+			_r="$_n kept up at $((_kb / 1000)) Mbit but would need about $((_sq * _need / _kb))% packet work at $((_need / 1000))"
+		else _r="$_n did not keep up (busiest core ${_sq}% at $((_kb / 1000)) Mbit)"; fi
+		_seen="${_seen:+$_seen; }$_r"
+		_lf=$_f; _lc=$_cap; _ln=$_n
+	done
+	[ -n "$_seen" ] || return 0
+	if [ -n "$_fstop$_fnd" ]; then
+		if [ -z "$_fnd" ]; then
+			case "$_fstop" in hfsc) _n=HFSC ;; *) _n=HTB ;; esac
+			_seen="$_seen; $_n was not checked"
+		fi
+		_w="queue check: $_seen"
+	else
+		_qsel=$_lf; _fcap=$_lc
+		_w="queue check: no queue keeps up at $((_need / 1000)) Mbit on this router ($_seen): the rates are cut to what $_ln shapes"
+	fi
+}
+
 _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel _mx=0 _cm _st=0 _ln _ls
+	local _fcap="" _fstop="" _cpu _qw _l0 _fw _pw _sw
 	# Line rates are the line's speed: the shaper takes Headroom off them.
 	_hr=$(uci -q get "$UCI_CFG.settings.bw_headroom")
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
@@ -1890,6 +2339,64 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	elif [ -n "$AS_DSL" ] && [ "$AS_DSL_DN" -gt 0 ]; then
 		_dn=$AS_DSL_DN; _up=$AS_DSL_UP; _src="the DSL sync rate"
 	fi
+	# The faster line rate as it will be suggested (never over the WAN port):
+	# the queue is picked for it, and the rate rows follow the queue's cap.
+	for _v in "$_dn" "$_up"; do
+		if ! { _isnum "$_v" && [ "$_v" -gt 0 ]; }; then continue; fi
+		[ "$AS_SPEED" -gt 0 ] && [ "$_v" -gt $((AS_SPEED * 1000)) ] && _v=$((AS_SPEED * 1000))
+		[ "$_v" -gt "$_mx" ] && _mx=$_v
+	done
+	# Queue: what the speed test's queue check found (_as_fitq). Else the
+	# rating's (queue_<tier>: HTB on a low-spec router, HFSC on a mid-range
+	# one, CAKE on a high-end one), then one step lighter at most (CAKE ->
+	# HFSC -> HTB): CAKE on a router that is not x86 with a line faster than
+	# cake_max_mbit, or a fresh speed test that kept a core at cpu_busy_pct
+	# (it runs unshaped: shaping only adds to that). Never richer than a
+	# queue the check found does not keep up.
+	_cpu="$AS_CORES cores${AS_MHZ:+ at $AS_MHZ MHz}"
+	[ "$AS_MHZ" = 0 ] && _cpu="$AS_CORES cores"
+	_qsel=""; _w=""; _fw=""
+	[ "$_mx" -gt 0 ] && _as_fitq $((_mx * _hr / 100))
+	if [ -z "$_qsel" ]; then
+		_fw=$_w
+		_qsel=$(uci -q get "$UCI_CFG.autosetup.queue_$AS_TIER")
+		case "$_qsel" in
+			cake|hfsc|htb) ;;
+			*) case "$AS_TIER" in low) _qsel=htb ;; mid) _qsel=hfsc ;; *) _qsel=cake ;; esac ;;
+		esac
+		case "$_qsel" in
+			htb)  _w="$AS_TIER-spec router ($_cpu): HTB is the cheapest queue" ;;
+			hfsc) _w="$AS_TIER-spec router ($_cpu): HFSC is lighter than CAKE and has a real-time Gaming class" ;;
+			*)    _w="$AS_TIER-spec router ($_cpu): CAKE also shares the line fairly between devices" ;;
+		esac
+		# _mx: the faster line rate, 0 with none known.
+		_cm=$(_as_num cake_max_mbit 500)
+		if [ "$_qsel" = cake ] && [ "$_cm" -gt 0 ] && [ "$_mx" -gt $((_cm * 1000)) ]; then
+			case "$AS_ARCH" in
+				x86_64|i[3-6]86) ;;
+				*) _qsel=hfsc; _st=1
+				   _w="$AS_TIER-spec router ($_cpu) at $((_mx / 1000)) Mbit: above cake_max_mbit ($_cm) CAKE runs out of CPU - HFSC is lighter and keeps the real-time Gaming class" ;;
+			esac
+		fi
+		if [ "$_lim" = router ] && [ "$_st" = 0 ]; then
+			case "$_qsel" in
+				cake) _qsel=hfsc; _w="$AS_TIER-spec router ($_cpu): the speed test maxed a CPU core (${_busy}%) unshaped - HFSC is lighter than CAKE" ;;
+				hfsc) _qsel=htb;  _w="$AS_TIER-spec router ($_cpu): the speed test maxed a CPU core (${_busy}%) unshaped - HTB is lighter than HFSC" ;;
+			esac
+		fi
+		case "$_fstop$_qsel" in
+			hfsccake) _qsel=hfsc; _w="HFSC is lighter than CAKE and has a real-time Gaming class" ;;
+			htbcake|htbhfsc) _qsel=htb; _w="HTB is the cheapest queue" ;;
+		esac
+		[ -n "$_fw" ] && _w="$_fw - $_w"
+	fi
+	# A queue whose module is missing: HTB.
+	if [ "$_qsel" = cake ] && ! _as_kmod sch_cake; then
+		_qsel=htb; _w="${_fw:+$_fw - }the CAKE module (kmod-sched-cake) is not installed"
+	elif [ "$_qsel" = hfsc ] && ! _as_kmod sch_hfsc; then
+		_qsel=htb; _w="${_fw:+$_fw - }the HFSC module (sch_hfsc) is not installed"
+	fi
+	_qw=$_w
 	if [ -n "$_src" ]; then
 		for _v in "download_kbps $_dn" "upload_kbps $_up"; do
 			_q=${_v#* }
@@ -1899,9 +2406,11 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 				[ "$_src" = "the speeds given" ] && _as_sug "settings.${_v% *}" 0 "0 = this direction is not shaped"
 				continue
 			fi
-			# Never over the WAN port's speed.
-			[ "$AS_SPEED" -gt 0 ] && [ "$_q" -gt $((AS_SPEED * 1000)) ] && _q=$((AS_SPEED * 1000))
-			[ "$_q" -gt "$_mx" ] && _mx=$_q
+			# Never over the WAN port's speed, and the row says so.
+			_l0=$_q; _pw=""
+			if [ "$AS_SPEED" -gt 0 ] && [ "$_q" -gt $((AS_SPEED * 1000)) ]; then
+				_q=$((AS_SPEED * 1000)); _pw=", cut to the WAN port's $AS_SPEED Mbit"
+			fi
 			# A direction the router's CPU held back: the line may be faster.
 			_w=""
 			if [ "$_src" = "the speed test" ]; then
@@ -1912,7 +2421,23 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 					_w=""
 				fi
 			fi
-			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_q") Mbit from $_src$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
+			# Measured from a LibreSpeed server: named, as its own limit may be
+			# under the line's.
+			_sw=""
+			if [ "$_src" = "the speed test" ]; then
+				case "${_v% *}" in download_kbps) _sw=src_down ;; *) _sw=src_up ;; esac
+				if [ "$(_as_kv "$_sw" "$AS_RUN")" = librespeed ]; then
+					_sw=" (LibreSpeed: $(_as_kv ls_server "$AS_RUN"))"
+				else
+					_sw=""
+				fi
+			fi
+			# No queue keeps up at the line's speed: what the lightest shapes.
+			if [ -n "$_fcap" ] && [ $((_q * _hr / 100)) -gt "$_fcap" ]; then
+				_q=$((_fcap * 100 / _hr))
+				_w="$_w, cut to $(_as_mbit "$_q") Mbit: this router's CPU shapes about $(_as_mbit "$_fcap") Mbit (queue check)"
+			fi
+			_as_sug "settings.${_v% *}" "$_q" "$(_as_mbit "$_l0") Mbit from $_src$_sw$_pw$_w; shaped at $(_as_mbit $((_q * _hr / 100))) Mbit (Headroom ${_hr}%)"
 		done
 	else
 		_as_note "No line speed yet: run the speed test, or give the line's download and upload speeds."
@@ -1928,46 +2453,9 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			_v=" The speed test may not have run over $AS_WAN: if its speeds look low, type them."
 		_as_note "$_ln lines have a default route ($_ls). QoS-Ex shapes $AS_WAN only: send the gaming devices out through it (an mwan3 rule or pbr).$_v"
 	fi
-	# Queue: the rating's (queue_<tier>: HTB on a low-spec router, HFSC on a
-	# mid-range one, CAKE on a high-end one), always shown, then one step
-	# lighter at most (CAKE -> HFSC -> HTB): CAKE on a router that is not x86
-	# with a line faster than cake_max_mbit, or a fresh speed test that kept a
-	# core at cpu_busy_pct (it runs unshaped: shaping only adds to that).
+	# The queue picked above, always shown.
 	_q=$(uci -q get "$UCI_CFG.settings.qdisc")
-	_v="$AS_CORES cores${AS_MHZ:+ at $AS_MHZ MHz}"
-	[ "$AS_MHZ" = 0 ] && _v="$AS_CORES cores"
-	_qsel=$(uci -q get "$UCI_CFG.autosetup.queue_$AS_TIER")
-	case "$_qsel" in
-		cake|hfsc|htb) ;;
-		*) case "$AS_TIER" in low) _qsel=htb ;; mid) _qsel=hfsc ;; *) _qsel=cake ;; esac ;;
-	esac
-	case "$_qsel" in
-		htb)  _w="$AS_TIER-spec router ($_v): HTB is the cheapest queue" ;;
-		hfsc) _w="$AS_TIER-spec router ($_v): HFSC is lighter than CAKE and has a real-time Gaming class" ;;
-		*)    _w="$AS_TIER-spec router ($_v): CAKE also shares the line fairly between devices" ;;
-	esac
-	# _mx: the faster line rate, 0 with none known.
-	_cm=$(_as_num cake_max_mbit 500)
-	if [ "$_qsel" = cake ] && [ "$_cm" -gt 0 ] && [ "$_mx" -gt $((_cm * 1000)) ]; then
-		case "$AS_ARCH" in
-			x86_64|i[3-6]86) ;;
-			*) _qsel=hfsc; _st=1
-			   _w="$AS_TIER-spec router ($_v) at $((_mx / 1000)) Mbit: above cake_max_mbit ($_cm) CAKE runs out of CPU - HFSC is lighter and keeps the real-time Gaming class" ;;
-		esac
-	fi
-	if [ "$_lim" = router ] && [ "$_st" = 0 ]; then
-		case "$_qsel" in
-			cake) _qsel=hfsc; _w="$AS_TIER-spec router ($_v): the speed test maxed a CPU core (${_busy}%) unshaped - HFSC is lighter than CAKE" ;;
-			hfsc) _qsel=htb;  _w="$AS_TIER-spec router ($_v): the speed test maxed a CPU core (${_busy}%) unshaped - HTB is lighter than HFSC" ;;
-		esac
-	fi
-	# A queue whose module is missing: HTB.
-	if [ "$_qsel" = cake ] && ! _as_kmod sch_cake; then
-		_qsel=htb; _w="the CAKE module (kmod-sched-cake) is not installed"
-	elif [ "$_qsel" = hfsc ] && ! _as_kmod sch_hfsc; then
-		_qsel=htb; _w="the HFSC module (sch_hfsc) is not installed"
-	fi
-	if [ "$_q" = "$_qsel" ]; then _as_keep settings.qdisc "$_w"; else _as_sug settings.qdisc "$_qsel" "$_w"; fi
+	if [ "$_q" = "$_qsel" ]; then _as_keep settings.qdisc "$_qw"; else _as_sug settings.qdisc "$_qsel" "$_qw"; fi
 	# Leaf queue inside the HFSC / HTB classes: sfq on a low-spec router.
 	if [ "$_qsel" != cake ]; then
 		_q=$(uci -q get "$UCI_CFG.hfsc.default_qdisc")
@@ -1987,7 +2475,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		simple|advanced|adaptive) ;;
 		*) if [ "$AS_TIER" = low ]; then _w=simple; else _w=adaptive; fi ;;
 	esac
-	_why="$AS_TIER-spec router ($_v)"
+	_why="$AS_TIER-spec router ($_cpu)"
 	if [ "$_q" = "$_w" ]; then _as_keep settings.nft_mode "$_why"
 	else _as_sug settings.nft_mode "$_w" "$_why"; fi
 	# Where the download is shaped: on the LAN device as the traffic leaves
@@ -2015,6 +2503,8 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	else _as_sug settings.live_refresh "$_w" "$_why"; fi
 	[ "$_lim" = router ] &&
 		_as_note "The router's CPU held the speed test back (busiest core ${_busy}%): the suggested line speeds are what the router managed, and the line may be faster. Shaping takes CPU too: if Live -> Stats shows drops or the ping rises, lower the rates."
+	[ -n "$_fcap" ] &&
+		_as_note "No queue keeps up with this line on this router's CPU, so the rates are set to what it shapes (about $(_as_mbit "$_fcap") Mbit). Shaped any faster, the queue builds before QoS-Ex and the ping rises under load."
 	# Overhead: the bytes each packet carries on the wire besides IP
 	# (tc-cake: ethernet 38, bridged-ptm 22; ATM 44 when the encapsulation is
 	# unknown); PPPoE adds 8, a VLAN tag 4.
@@ -2032,7 +2522,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	# Small routers: Ping Filter Lite, a shorter server list, fewer flash writes.
 	if uci -q get "$UCI_CFG.pingfilter" >/dev/null; then
 		if [ "$AS_TIER" = low ]; then
-			_as_sug pingfilter.lite 1 "low-spec router ($_v, $AS_MEM_MB MB): ping limit or radius, no gameplay grading or Ping Catch"
+			_as_sug pingfilter.lite 1 "low-spec router ($_cpu, $AS_MEM_MB MB): ping limit or radius, no gameplay grading or Ping Catch"
 		else
 			_as_sug pingfilter.lite 0 "$AS_TIER-spec router: the full Ping Filter"
 		fi
@@ -2060,7 +2550,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		esac
 	fi
 	[ "$AS_FOREIGN" = no ] || _as_note "Another shaper ($AS_FOREIGN) is on $AS_WAN: stop it before QoS-Ex starts."
-	[ -n "$AS_HW_SAVED" ] && [ "$AS_HW_SAVED" != "$AS_HW" ] &&
+	_as_hw_moved &&
 		_as_note "This config was set up on other hardware ($AS_HW_SAVED, now $AS_HW): check these suggestions."
 	if [ "$_src" = "the speed test" ]; then
 		_v=$(_as_kv ping_idle "$AS_RUN")
@@ -2078,7 +2568,9 @@ autosetup_suggest() {
 	[ "${3:-}" = -p ] && _p=1
 	_as_probe
 	_tmp=$(mktemp /tmp/qos-ex-sugg.XXXXXX 2>/dev/null) || { err "no temp file"; return 1; }
-	_as_suggest "$@" > "$_tmp"
+	# When they were made (uptime, s): apply refuses them an hour on, and
+	# LuCI hands it back (at=) so it applies only the ones it showed.
+	{ echo "sugg_at=$(($(_as_up100) / 100))"; _as_suggest "$@"; } > "$_tmp"
 	[ "$_p" = 0 ] || _as_probe_out
 	cat "$_tmp"
 	mv -f "$_tmp" "$AS_SUGG"
@@ -2093,17 +2585,28 @@ _as_macs() {
 	done
 }
 
+# True while a speed test holds its lock.
+_as_testing() {
+	command -v flock >/dev/null 2>&1 || return 1
+	! flock -n "$AS_LOCK" true 2>/dev/null
+}
+
 # Apply suggestions from the last suggest: all (packet steering apart), the
 # word steering, or keys by name. dev=<MAC> / low=<MAC> (repeatable) set the
-# gaming / low-priority devices; dev= or low= alone empties that list. The
-# config is copied first, for undo. The Ping Filter is set up on its own (its
-# pages' setup card), never here.
+# gaming / low-priority devices; dev= or low= alone empties that list. at=
+# (LuCI) names the suggestions the page showed: other ones are refused. The
+# config is copied first, for undo, and kept only when something changed. The
+# Ping Filter is set up on its own (its pages' setup card), never here.
 autosetup_apply() {
 	local _t _k _cur _new _why _a _sel _n=0 _bak=0 _steer="" _devs="" _lows="" _dset=0 _lset=0 _m _old _was
+	local _want="" _only="" _at _now _chg=""
 	[ -f "$AS_SUGG" ] || { err "no suggestions yet - run: qos-ex.sh autosetup suggest"; return 1; }
+	# An apply under a running speed test would start shaping under it.
+	_as_testing && { err "a speed test is running - apply once it has ended"; return 1; }
 	[ $# -gt 0 ] || set -- all
 	for _a in "$@"; do
 		case "$_a" in
+			at=*) _want=${_a#at=} ;;
 			dev=*|low=*)
 				# Lower-cased first: LuCI sends lower case, a hand-typed MAC
 				# may not. Anything else but empty is not a device: ignored.
@@ -2115,11 +2618,21 @@ autosetup_apply() {
 					*) continue ;;
 				esac
 				case "$_a" in dev=*) _dset=1 ;; *) _lset=1 ;; esac ;;
+			*) _only="$_only $_a" ;;
 		esac
 	done
-	if [ "$*" != steering ]; then
+	# The suggestions: under an hour old (an older file is another line, or
+	# another speed test), and the ones the page showed.
+	_at=$(_as_kv sugg_at "$AS_SUGG")
+	_now=$(($(_as_up100) / 100))
+	if ! _isnum "$_at" || [ "$_now" -lt "$_at" ] || [ $((_now - _at)) -ge 3600 ]; then
+		err "the suggestions are over an hour old - run: qos-ex.sh autosetup suggest"; return 1
+	fi
+	[ -z "$_want" ] || [ "$_want" = "$_at" ] ||
+		{ err "the suggestions changed since they were shown (another window?) - look at them again"; return 1; }
+	if [ "$_only" != " steering" ]; then
 		mkdir -p /etc/qos-ex 2>/dev/null
-		cp "/etc/config/$UCI_CFG" "$AS_BAK" 2>/dev/null || { err "could not copy the config - nothing changed"; return 1; }
+		cp "/etc/config/$UCI_CFG" "$AS_BAK.new" 2>/dev/null || { err "could not copy the config - nothing changed"; return 1; }
 		_bak=1
 	fi
 	while IFS='|' read -r _t _k _cur _new _why; do
@@ -2142,6 +2655,7 @@ autosetup_apply() {
 		[ "$_bak" = 1 ] || continue
 		uci -q set "$UCI_CFG.$_k=$_new" || continue
 		msg "auto setup: $_k = $_new (was ${_cur:-unset})"
+		_chg="$_chg $_k"
 		_n=$((_n + 1))
 	done < "$AS_SUGG"
 	# Devices by MAC. A device is never gaming and low priority both: gaming
@@ -2169,16 +2683,26 @@ autosetup_apply() {
 		fi
 		if [ "$(_as_macs)" != "$_was" ]; then
 			msg "auto setup: gaming devices = $(uci -q get "$UCI_CFG.ips.gaming_mac"), low priority = $(uci -q get "$UCI_CFG.ips.lowprio_mac")"
+			_chg="$_chg ips.gaming_mac ips.lowprio_mac pingfilter.pf_devices"
 			_n=$((_n + 1))
 		fi
 	fi
 	# Set up either way: Auto Setup is not offered again on this hardware.
 	# Packet steering alone is not the setup. A setting left blank by a
-	# reset and not applied: the default.
+	# reset and not applied: the default (and undo blanks it again). The
+	# copy for undo names the keys this apply changed, the switch (Apply and
+	# start turns it on) and the setup state; one that changed nothing keeps
+	# the last copy, so undo still reaches the apply before it.
 	if [ "$_bak" = 1 ]; then
+		for _k in $AS_BLANK; do [ -n "$(uci -q get "$UCI_CFG.$_k")" ] || _chg="$_chg $_k"; done
 		_as_hw
 		_as_done 1 "$AS_HW"
 		_as_fill
+		if [ -n "$_chg" ]; then
+			{ echo "# autosetup undo:$_chg settings.enabled autosetup.done autosetup.hw"; cat "$AS_BAK.new"; } \
+				> "$AS_BAK.tmp" 2>/dev/null && mv -f "$AS_BAK.tmp" "$AS_BAK"
+		fi
+		rm -f "$AS_BAK.new" "$AS_BAK.tmp" 2>/dev/null
 	fi
 	if [ -n "$_steer" ] && uci -q get network.@globals[0] >/dev/null; then
 		mkdir -p /etc/qos-ex 2>/dev/null
@@ -2195,25 +2719,37 @@ autosetup_apply() {
 	return 0
 }
 
-# Put back the config and packet steering as they were before the last apply.
+# Put back what the last apply changed, and packet steering: the keys its
+# copy names, each as the copy has it (read by uci from the copy, with no
+# change file of its own); anything else changed since stays. A copy from an
+# older shaper names no keys: every key an apply can set.
 autosetup_undo() {
-	local _v="" _n=0 _tmp
+	local _v="" _n=0 _d _keys _k _l
+	_as_testing && { err "a speed test is running - undo once it has ended"; return 1; }
 	if [ -f "$AS_BAK" ]; then
-		_tmp=$(mktemp "/etc/config/.$UCI_CFG.XXXXXX" 2>/dev/null) || { err "could not write /etc/config"; return 1; }
-		if cp "$AS_BAK" "$_tmp" 2>/dev/null; then
-			# Changes staged with the uci CLI belong to the config going away.
-			uci -q revert "$UCI_CFG"
-			chmod 644 "$_tmp" 2>/dev/null
-			mv -f "$_tmp" "/etc/config/$UCI_CFG"
-			rm -f "$AS_BAK"
-			# autosetup.done comes back as it was (0: Apply is on the Auto
-			# Setup tab), so LuCI builds its menu again, as after _as_done.
-			rm -f /tmp/luci-indexcache* 2>/dev/null
-			msg "auto setup: config put back as it was before the last apply"
-			_n=1
-		else
-			rm -f "$_tmp"; err "could not restore $AS_BAK"; return 1
-		fi
+		_d=$(mktemp -d /tmp/qos-ex-undo.XXXXXX 2>/dev/null) || { err "no temp directory"; return 1; }
+		cp "$AS_BAK" "$_d/$UCI_CFG" 2>/dev/null || { rm -rf "$_d"; err "could not read $AS_BAK"; return 1; }
+		_keys=$(sed -n '1s/^# autosetup undo://p' "$AS_BAK")
+		[ -n "$_keys" ] || _keys="$AS_KEYS $AS_BLANK ips.gaming_mac ips.lowprio_mac pingfilter.pf_devices settings.enabled autosetup.done autosetup.hw"
+		# Changes staged with the uci CLI belong to the config being put back.
+		uci -q revert "$UCI_CFG"
+		for _k in $_keys; do
+			case "$_k" in network.*|*[!A-Za-z0-9._-]*) continue ;; esac
+			_v=$(uci -c "$_d" -t "$_d" -q get "$UCI_CFG.$_k")
+			uci -q delete "$UCI_CFG.$_k"
+			case "$_k" in
+				ips.gaming_mac|ips.lowprio_mac|pingfilter.pf_devices)
+					for _l in $_v; do uci -q add_list "$UCI_CFG.$_k=$_l"; done ;;
+				*) [ -z "$_v" ] || uci -q set "$UCI_CFG.$_k=$_v" ;;
+			esac
+		done
+		uci -q commit "$UCI_CFG"
+		rm -rf "$_d"; rm -f "$AS_BAK"
+		# autosetup.done comes back as it was (0: Apply is on the Auto Setup
+		# tab), so LuCI builds its menu again, as after _as_done.
+		rm -f /tmp/luci-indexcache* 2>/dev/null
+		msg "auto setup: what the last apply changed is back as it was"
+		_n=1
 	fi
 	if [ -f "$AS_STEER_BAK" ]; then
 		read -r _v < "$AS_STEER_BAK"

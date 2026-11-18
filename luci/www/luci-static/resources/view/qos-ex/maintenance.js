@@ -498,7 +498,8 @@ return view.extend({
 		// when the copy put back has setup done (an apply from the CLI).
 		var btnAsUndo = E('button', { 'class': 'cbi-button cbi-button-reset',
 			'click': ui.createHandlerFn(self, function() {
-				if (!confirm(_('Undo the last Auto Setup?'))) return;
+				if (!confirm(_('Undo the last Auto Setup?') + '\n\n' +
+					_('The settings it changed go back as they were; anything changed since stays.'))) return;
 				return h.callAutosetupRun('undo', '').then(function(r) {
 					if (!(r && r.ok)) throw new Error((r && r.error) || 'rc=' + ((r && r.rc) || '?'));
 					h.menuGo([]);

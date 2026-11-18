@@ -5,11 +5,62 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.4 · Ping Filter 2.1.0.2 · shaper 3.2.2.3**
+Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.8**
+
+## Shaper 3.2.2.8
+
+- Fixed: the speed test's LibreSpeed backup did not start when the test server could not be reached while other traffic crossed the line. The fetches failed, yet the other traffic (2.4 Mbit down and 0.2 Mbit up on the router it was seen on) was over the 0.1 Mbit the test takes as almost nothing, so the test gave it as the line's speed, and its queue check passed CAKE on it. A part of the test whose fetches keep failing (three failed fetches a stream) now counts as almost nothing whatever else crossed the line: it runs again from LibreSpeed, and LibreSpeed's reading counts even when it is lower. With the backup off, or no LibreSpeed server answering, the test gives no result and says why, and a queue check whose fetches keep failing has measured nothing.
+- Added: the result keeps how many fetches failed each way (`fails_down`, `fails_up`); the log and **Copy for forum** carry them.
+
+## Shaper 3.2.2.7
+
+- Added: a LibreSpeed server as the speed test's backup. When Cloudflare refuses (an HTTP error such as 429) or sends almost nothing, that part of the test (the download, the upload or a queue check) runs again from the nearest LibreSpeed server, and that direction stays there for the rest of the test; a download under a fiftieth of the upload runs again with its queue check. The higher of the two readings counts. The server comes from LibreSpeed's public list (the nearest that sends 1 MB over plain HTTP) or from `autosetup.fallback_url`; `autosetup.fallback 0` turns it off. Step ③ names the server on the speeds it measured, and the log, the result (`src_down`, `src_up`, `ls_server`) and **Copy for forum** say which parts ran there.
+- Added: `sh /root/qos-ex-check.sh speedfallback` (dev branch) runs the speed test with `test_url` at a closed port for that run only, so all of it comes from LibreSpeed.
+
+## Shaper 3.2.2.6
+
+- Fixed: Auto Setup's queue check counted a queue as keeping up at the line's speed when its download had carried almost nothing (0.2 Mbit while CAKE ran at 836 Mbit), so Auto Setup could suggest CAKE without having measured it. A check whose download carries under half the rate it runs at, with no CPU core busy, now measures nothing: the check stops there, the router's rating picks the queue, and step ③ says the check could not measure it. A queue whose download carried less than the speed needed is now judged by scaling up what it carried, as typed speeds already were, instead of being taken as keeping up.
+- Fixed: a speed test whose download carried almost nothing (0.1 Mbit beside a 734 Mbit upload) gave that as the line's download speed. A download under a fiftieth of the upload is no result now: the test says to try again in a few minutes, or to type the line's speeds.
+- Added: the speed test keeps the last error of its download and of its upload in its result (`fail_down`, `fail_up`), says in the log when one failed, and **Copy for forum** carries both.
+
+## LuCI app 1.4.0.7
+
+- Added: the Ping Filter **Dashboard** says when handshake timing gets no conntrack events (Ping Filter 2.1.0.2), with a link to the log.
 
 ## Ping Filter 2.1.0.2
 
 - Added: a warning when the handshake listener gets no conntrack events. Another kernel module can take those events (full-cone NAT built without shared events does, after a firewall stop or restart). The Ping Filter then timed no game's first exchange, and servers that ignore ping stayed on estimates with nothing to say why. It now notices when new servers bring no events, logs it once with how to bring them back (`rmmod nf_conntrack_netlink && modprobe nf_conntrack_netlink` over SSH, or a reboot), and shows `hs_quiet=1` in its status until a new connection is heard again.
+
+## LuCI app 1.4.0.6
+
+- Fixed: **Apply** (or **Finish**) and packet steering's **Turn on** could be pressed while the speed test ran, which started shaping under the test. They are greyed out until it ends.
+- Fixed: **Apply** took the router's latest suggestions, even ones worked out in another window, or over an hour old. It now applies only the ones the page shows, and says to reload the page otherwise.
+- Changed: the Overview's "These settings were made on other hardware" now follows the router's own judgement (shaper 3.2.2.5), so an OpenWrt upgrade no longer raises it.
+- Changed: **Undo last Auto Setup** asks with what it does now: the settings it changed go back, anything changed since stays. The speed test says the Ping Filter pauses too.
+
+## Shaper 3.2.2.5
+
+- Fixed: **Undo last Auto Setup** put back the whole config as it was before the last apply, however long ago, so every change made since went with it: devices, the Ping Filter's home and lists, Setup. It now puts back only the settings that apply changed, with shaping on or off as before. An undo copy from an older shaper does the same for every setting Auto Setup can change.
+- Fixed: an apply (or **Finish**) that changed nothing replaced the undo copy, so the apply before it could no longer be undone. It now keeps the copy.
+- Fixed: a speed test that filled the WAN port with a busy CPU was called held by the router's CPU, with "the line may be faster", and stepped the queue down when no queue check ran. A full port is now the port's limit.
+- Fixed: the hardware Auto Setup recorded was compared to the MB of RAM, and a new kernel (an OpenWrt upgrade) changes that a little, so the Overview could say the settings were made on other hardware. RAM within 5% is now the same router.
+- Fixed: `autosetup apply` took whatever suggestions were saved last, however old, and ran during a speed test. It now refuses suggestions over an hour old and waits for a test to end. `autosetup undo` waits as well.
+- Changed: speeds typed above the WAN port's speed now say they were cut to it.
+
+## LuCI app 1.4.0.5
+
+- Fixed: during the **Auto Setup** speed test the progress bar stayed at "Starting" and the gauges stayed empty until the end. With shaper 3.2.2.4 the bar follows the download, the queue check and the upload, and the download gauge shows the rate as it runs.
+- Added: a line under the speed test's results with its queue check: each queue it tried at the shaped download rate, whether it kept up, the busiest core's packet work and the ping under load through it.
+- Added: **Your router** names the CPU's cores where the CPU says (Cortex-A53, Cortex-A55 + Cortex-A76, …), else its model.
+
+## Shaper 3.2.2.4
+
+- Added: **Auto Setup** checks which queue this router can run at your line's speed. After the speed test's download, with shaping still off, it builds the download path QoS-Ex uses (the IFB and the queue at the shaped rate, with your settings) and downloads again for a few seconds: CAKE first, then HFSC, then HTB, until one keeps up, meaning no CPU core reaches 80% packet work (softirq) and the kernel drops nothing before the queue. Step ③ suggests the first that keeps up, on any router: a small router on a slow line now gets CAKE when it keeps up, and a fast router keeps CAKE at a gigabit when it keeps up. When none keeps up, it suggests HTB with the speeds cut to what HTB shaped, and says so. Speeds typed in are judged by scaling the check's figures to them. It adds up to about 20 s to the speed test, and more requests to the test server.
+- Added: `autosetup.fit_check` (`1`; `0` = no queue check) and `autosetup.fit_sirq_pct` (`80`).
+- Changed: the queue by rating (`queue_low` / `queue_mid` / `queue_high`), `cake_max_mbit` and the step down after a test the CPU held back now apply only with no queue check: no speed test in the last hour, or a check that could not run. They never pick a queue the check found does not keep up.
+- Fixed: the speed test never said which half it was running, so the page could not follow it.
+- Changed: the speed test records, for each half, the core with the most packet work and the packets the kernel dropped; the router check records the CPU's core type (`cpu_part`, `cpu_model`). Both are in the debug report (**Copy for forum**).
+- Not changed: the rule set, the leaf queues, where the download is shaped and Ping Filter Lite still follow the router's rating.
 
 ## Shaper 3.2.2.3
 

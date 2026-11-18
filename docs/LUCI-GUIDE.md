@@ -79,8 +79,8 @@ your devices, so one busy device cannot crowd out another.
 
 Auto Setup checks your router, measures your line, and suggests a full set
 of shaper settings for both. Nothing changes until you apply, and **System →
-Maintenance → Undo last Auto Setup** puts your old settings back, shaping on
-or off as it was. It sets up the shaper only: the Ping Filter is optional and
+Maintenance → Undo last Auto Setup** puts back the settings it changed
+(anything changed since stays), shaping on or off as it was. It sets up the shaper only: the Ping Filter is optional and
 has its own setup.
 
 The tab is there after a fresh install, after **Reset to defaults**, and
@@ -117,7 +117,7 @@ The rating decides most of what Auto Setup suggests:
 
 | Rating | Which routers | Suggested |
 |---|---|---|
-| Low-spec | One CPU core, a MIPS CPU, or 128 MB of RAM or less | HTB with sfq queues and the Simple rule set; the download shaped on the LAN device when there is only one; Live pages refreshed every 2 s; Ping Filter Lite with a smaller server list |
+| Low-spec | One CPU core, a MIPS CPU, or 128 MB of RAM or less | HTB with sfq queues and the Simple rule set; the download shaped on the LAN device when there is only one; Live pages refreshed every 2 s; Ping Filter Lite (and a smaller server list at 128 MB of RAM or less) |
 | Mid-range | Everything between the two | HFSC with fq_codel queues and the Adaptive rule set |
 | High-end | Any x86 router, or 4 or more cores at 1500 MHz or more with 1024 MB of RAM or more | CAKE with the Adaptive rule set (HFSC on a router that is not x86 when the line is faster than 500 Mbit) |
 
@@ -125,13 +125,17 @@ The router's own figures count: a router sold with 1 GB of RAM reports a
 little under 1024 MB, and some CPUs report no speed, so both are rated
 mid-range. The limits, and the queue and rule set for each rating, can be
 changed in the `autosetup` section
-([SETUP.md](SETUP.md#autosetup--auto-setup)).
+([SETUP.md](SETUP.md#autosetup--auto-setup)). The queue in this table is
+the fallback: after a speed test, the queue check below picks it.
+**Your router** also names the CPU's cores where the CPU says (Cortex-A53,
+Cortex-A55 + Cortex-A76, …), else its model.
 
 ### ① Line speed
 
 The speed test downloads and uploads from Cloudflare's speed servers for
-about 30 seconds (up to 1500 MB each way). Shaping and the Ping Filter are
-paused while it runs. With two internet lines it goes out through the WAN
+about 30 seconds (up to 1500 MB each way); when Cloudflare refuses, cannot be
+reached or sends almost nothing, that part runs again from the nearest LibreSpeed server,
+named in step ③. Shaping and the Ping Filter are paused while it runs. With two internet lines it goes out through the WAN
 set in **Setup** (the line QoS-Ex shapes), even when the router's own
 traffic normally takes the other line. It then shows each speed against
 the WAN port's, and what held it back:
@@ -141,10 +145,23 @@ the WAN port's, and what held it back:
   faster;
 - **the router's CPU**: the router could not go faster, so the result may
   be under your line's speed. Step ③ says so on the speed rows: type the
-  line's speeds if you know them. The test runs with shaping off, and
-  shaping takes CPU too, so step ③ suggests a queue one step lighter than
-  your router's rating (CAKE → HFSC, HFSC → HTB). The rule set stays the
-  rating's.
+  line's speeds if you know them.
+
+Between the download and the upload, the **queue check** runs the download
+again through the queue QoS-Ex would build (the IFB and the queue at the
+shaped rate, with your settings): CAKE first, then HFSC, then HTB, a few
+seconds each, until one keeps up. A queue keeps up when no CPU core reaches
+80% packet work (softirq, `fit_sirq_pct`) and the kernel drops nothing
+before it. If under half that rate arrives with no core busy, nothing was
+measured: the check stops there and step ③ says so. A line under the
+gauges says what each queue did, with the
+busiest core and the ping under load through it. Step ③ suggests the first
+one that kept up, whatever the router's rating; when none does, HTB, with
+the speeds cut to what HTB shaped. Speeds typed in later are judged from
+the same figures. With no check (speeds typed with no speed test in the
+last hour, or a check that could not run or measure), the queue follows the rating
+below, one step lighter after a test the CPU held back (CAKE → HFSC, HFSC →
+HTB).
 
 **Bufferbloat, unshaped** grades how far your ping rose under load with
 shaping off, alongside the idle and loaded pings. This delay under load is
@@ -159,10 +176,13 @@ what QoS-Ex is there to remove.
 | D | under 400 ms |
 | F | 400 ms or more |
 
-Cloudflare limits how many tests one address can run in a short time. If
-the test cannot run (it answers HTTP 429), the reason is shown here: type
-your line's speeds in Mbit and press **Use these speeds**, or try again
-later.
+Cloudflare limits how many tests one address can run in a short time
+(HTTP 429). When it refuses, cannot be reached (its fetches keep failing,
+even while other traffic crosses the line), or a part of the test gets
+almost nothing from it (a download under a fiftieth of the upload too),
+that part runs again from the nearest LibreSpeed server, and the speed rows
+in ③ name it. If that fails too, the reason is shown here: type your line's
+speeds in Mbit and press **Use these speeds**, or try again later.
 
 ### ② Devices
 
@@ -359,7 +379,7 @@ time and when you last played on it. Click one for the detail:
 | C | 60 to 69 |
 | D | under 60 |
 
-Two warnings can appear:
+These warnings can appear:
 
 - A watched device has a public IPv6 address. The Ping Filter checks IPv4
   servers only, so a game that connects over IPv6 is not filtered.
@@ -367,6 +387,10 @@ Two warnings can appear:
   starts. Its button loosens the filter one step: the ping limit 10 ms
   higher, Ping Catch 10 ms higher (up to 250), or, without Ping Catch, the
   radius a quarter wider.
+- **Handshake timing gets no conntrack events**: the router's kernel no
+  longer reports new connections to the Ping Filter, so a server that
+  ignores ping is not measured and keeps its estimate (~). Its link opens
+  the Ping Filter log, which says how to bring the events back.
 
 ### Map
 
@@ -756,8 +780,10 @@ for forum** or **Save .txt**.
 
 **Auto Setup** — **Run Auto Setup** brings the Auto Setup tab back. Your
 settings stay as they are until you apply new ones. **Undo last Auto Setup**
-puts back the settings from before the last Apply, shaping on or off as it
-was then (off again after a first setup), and opens the Auto Setup tab again.
+puts back the settings the last Apply changed, as they were before it
+(anything changed since stays), shaping on or off as it was then (off again
+after a first setup), and opens the Auto Setup tab again. An Apply that
+changed nothing leaves the earlier one to undo.
 
 **Settings backup**:
 

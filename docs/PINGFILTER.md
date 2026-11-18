@@ -139,9 +139,9 @@ shows **Matchmaking looks stuck** with a button that relaxes it one step
 **Servers that ignore ping stay on estimates (~), even ones you played
 on.** The game's first exchange is timed from the router's conntrack
 events, and another kernel module can take those: full-cone NAT built
-without shared events does, after a firewall stop or restart. The Ping
-Filter log and **Settings → Tools → Show status** then say so. Over SSH,
-`rmmod nf_conntrack_netlink && modprobe nf_conntrack_netlink`, or a
+without shared events does, after a firewall stop or restart. The
+Dashboard then says **Handshake timing gets no conntrack events**. Over
+SSH, `rmmod nf_conntrack_netlink && modprobe nf_conntrack_netlink`, or a
 reboot, brings them back.
 
 **A game over IPv6 is not filtered.** Ping Filter grades IPv4 servers only;

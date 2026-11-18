@@ -417,6 +417,12 @@ return view.extend({
 		if (pfOn && (j.geo_down | 0))
 			els.push(E('div', { 'class': 'pf2-learn' },
 				_('No location service answers; an ad blocker may be blocking it.')));
+		// The handshake listener hears nothing from the kernel (another module
+		// took the conntrack events): no server that ignores ping is measured.
+		if (pfOn && (j.hs_quiet | 0))
+			els.push(E('div', { 'class': 'pf2-learn' }, [
+				_('Handshake timing gets no conntrack events, so servers that ignore ping stay on estimates (~). See the Ping Filter log on '),
+				E('a', { 'href': L.url('admin', 'network', 'qos-ex', 'system', 'logs') }, _('System \u2192 Logs')), '.' ]));
 
 		// "Now playing" — the single server we are actively gaming on: the
 		// connected server carrying CONTINUOUS game UDP right now (pickLive:
