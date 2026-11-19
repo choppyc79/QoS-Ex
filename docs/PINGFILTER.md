@@ -82,9 +82,9 @@ a mode card on the **Dashboard**:
 
 **Casual** and **Competitive** add 80 or 40 ms to your line's base ping, which
 the router measures each time you pick one (its ping to 1.1.1.1, the address
-Auto Setup's speed test pings); the card shows the sum. Competitive shows a
-warning: a game with few servers that close may find no match. Clicking
-**Ping** with no limit set picks Casual.
+Auto Setup's speed test pings); the line above the cards shows the sum.
+Competitive shows a warning: a game with few servers that close may find no
+match. Clicking **Ping** with no limit set picks Casual.
 
 A change on the Dashboard or the Map applies at once, even to the server you
 are playing on; a warning shows while a match is on. Each mode keeps its own
