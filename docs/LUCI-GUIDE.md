@@ -434,8 +434,9 @@ above 800, the table shows the first 800 and the servers in use.
 
 - The chips show only allowed, blocked, always allowed, always blocked or
   cached (known from earlier) servers.
-- The list starts grouped by country, best ping first. **Sort** changes
-  that, and the search box finds an address, country, city or owner.
+- The list starts nearest first: by distance from your home location,
+  then by ping, with servers not located yet last. **Sort** changes that,
+  and the search box finds an address, country, city or owner.
 - A server on a game company's own network shows the company after its
   address (Riot Games, Valve, Blizzard, …).
 
