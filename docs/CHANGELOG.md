@@ -5,7 +5,15 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.8 · Ping Filter 2.1.0.2 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.0.9 · Ping Filter 2.1.0.3 · shaper 3.2.2.8**
+
+## LuCI app 1.4.0.9
+
+- Changed: the Ping Filter **Dashboard**'s **Ping** card names its two presets, **Casual** (your base ping + 80 ms) and **Competitive** (+ 40 ms), shows the sum (for example "Block servers over 48 ms (base ping 8 + 40)"), and warns while Competitive is on that a game with few servers that close may find no match. Clicking **Ping** with no limit set now picks Casual (it was Competitive). Your own **Ping limit** works as before.
+
+## Ping Filter 2.1.0.3
+
+- Changed: the `competitive` and `casual` presets add 40 or 80 ms to your line's base ping, instead of being 40 or 80 ms flat. A flat limit left a line with a high base ping little room for its region's servers: on a 25 ms line, 40 ms was only 15 ms above the line itself. The router measures the base ping each time a preset is picked (its ping to `autosetup.ping_host`, 1.1.1.1, taken as a server's ping is), keeps it as `pingfilter.base_ms` and logs the sum (`profile 'competitive' applied: 48 ms (base ping 8 ms + 40)`). With no answer, the preset is 40 or 80 ms as before. A limit set before this update stays as it is until you pick again.
 
 ## LuCI app 1.4.0.8
 
