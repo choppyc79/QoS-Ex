@@ -336,12 +336,15 @@ The Ping Filter's main page. Along the top:
 The figure tiles (**Mode**, **Servers**, **Always allow / block**,
 **Watched devices**, **Allowed / blocked**) each link to where that is set.
 
-**Mode cards.** Click one to switch mode. Each mode keeps its own number.
+**Mode cards.** Click one to switch mode. Each mode keeps its own number. The
+line above the cards says what is running; the card in use shows only its
+controls, the others what a click gives you.
 
 - **Ping** — block servers whose ping is over a limit: **Casual** (your
   base ping + 80 ms), **Competitive** (+ 40 ms), or your own **Ping limit**
   (1 to 5000 ms). The router measures the base ping (its ping to 1.1.1.1)
-  each time you pick Casual or Competitive, and the card shows the sum.
+  each time you pick Casual or Competitive; the line above the cards shows
+  the sum.
   Competitive shows a warning: a game with few servers that close may find
   no match. Clicking **Ping** with no limit set picks Casual.
 - **Distance** — block servers further from home than your **Radius** (50 to
