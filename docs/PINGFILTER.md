@@ -75,10 +75,16 @@ a mode card on the **Dashboard**:
 
 | Mode | What it does | Good for |
 |---|---|---|
-| **Ping** | Blocks servers whose ping is over your limit: 40 ms, 80 ms or your own **Ping limit** (1 to 5000 ms) | You know what ping you will accept. The lower the limit, the longer matchmaking may take |
+| **Ping** | Blocks servers whose ping is over your limit: **Casual** (your base ping + 80 ms), **Competitive** (+ 40 ms) or your own **Ping limit** (1 to 5000 ms) | You know what ping you will accept. The lower the limit, the longer matchmaking may take, and a limit under your region's servers can stop it finding a match at all |
 | **Distance** | Blocks servers further from home than your **Radius** (50 to 20,000 km) | Keeping games in your region, including on servers that do not answer ping |
 | **Distance** with **Ping Catch** | Lets in every server inside the radius, plus any outside it whose ping is at or under the catch (1 to 250 ms; 0 = off) | A tight radius that should still let in a fast server just outside it |
 | **Watch only** | Lists and grades servers; only **Always block** entries and a country list block | Seeing what you connect to before you block anything |
+
+**Casual** and **Competitive** add 80 or 40 ms to your line's base ping, which
+the router measures each time you pick one (its ping to 1.1.1.1, the address
+Auto Setup's speed test pings); the card shows the sum. Competitive shows a
+warning: a game with few servers that close may find no match. Clicking
+**Ping** with no limit set picks Casual.
 
 A change on the Dashboard or the Map applies at once, even to the server you
 are playing on; a warning shows while a match is on. Each mode keeps its own
@@ -230,8 +236,9 @@ qos-ex.sh pingfilter enable
 `enable` refuses, and says why, until a device is watched and the home is
 set. `qos-ex.sh pingfilter disable` turns it off.
 
-**Pick a mode.** A preset, one of `competitive` (40 ms), `casual` (80 ms),
-`distance` or `observe` (Watch only); or the values themselves:
+**Pick a mode.** A preset, one of `competitive` (your base ping + 40 ms),
+`casual` (base ping + 80 ms), `distance` or `observe` (Watch only); or the
+values themselves:
 
 ```sh
 qos-ex.sh pingfilter profile casual
@@ -289,6 +296,7 @@ range-checks every number.
 | `pf_devices` | *(list)* | Which gaming devices are watched (**Watched devices**): a gaming device's MAC or IPv4 address. You tick them; a device that stops being Gaming is dropped. **Empty = none** |
 | `block_mode` | `ping` | `ping` or `distance` |
 | `threshold_ms` | `0` | Ping limit, 0–5000. `0` = Watch only: only the Always block list and a country list block |
+| `base_ms` | *(empty)* | Your base ping as **Casual** / **Competitive** last measured it (the router's ping to `autosetup.ping_host`); their limit is it + 80 / + 40 ms. Written by them; the filter itself does not read it |
 | `home_lat` / `home_lon` | *(empty)* | Your location |
 | `home_radius_km` | `1000` | Distance-mode radius, 50–20000 |
 | `ping_catch_ms` | `0` | Distance mode, 0–250: outside the radius, servers whose ping is at or under this are let in too. Inside the radius every server is. `0` = the radius alone decides |
