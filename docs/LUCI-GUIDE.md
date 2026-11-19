@@ -338,8 +338,12 @@ The figure tiles (**Mode**, **Servers**, **Always allow / block**,
 
 **Mode cards.** Click one to switch mode. Each mode keeps its own number.
 
-- **Ping** — block servers whose ping is over a limit: **40 ms**, **80 ms**,
-  or your own **Ping limit** (1 to 5000 ms).
+- **Ping** — block servers whose ping is over a limit: **Casual** (your
+  base ping + 80 ms), **Competitive** (+ 40 ms), or your own **Ping limit**
+  (1 to 5000 ms). The router measures the base ping (its ping to 1.1.1.1)
+  each time you pick Casual or Competitive, and the card shows the sum.
+  Competitive shows a warning: a game with few servers that close may find
+  no match. Clicking **Ping** with no limit set picks Casual.
 - **Distance** — block servers further from home than your **Radius** (50 to
   20,000 km). **Ping Catch** (0 to 250 ms, 0 = off) also lets in servers
   outside the radius whose ping is at or under it.
