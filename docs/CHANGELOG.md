@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.9 · Ping Filter 2.1.0.3 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.0 · Ping Filter 2.1.0.3 · shaper 3.2.2.8**
+
+## LuCI app 1.4.1.0
+
+- Changed: on the Ping Filter **Dashboard** the mode card in use no longer repeats the line above the cards, which already says what is running; the other cards still say what a click gives you. The base ping sum of **Casual** and **Competitive** moved to that line (for example "Blocking servers over 85 ms (base ping 5 + 80)").
 
 ## LuCI app 1.4.0.9
 
