@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.0.8 · Ping Filter 2.1.0.2 · shaper 3.2.2.8**
+
+## LuCI app 1.4.0.8
+
+- Changed: the Ping Filter **Servers** list now opens with the servers nearest your home first, and servers at the same distance by ping; servers not located yet come last. **Sort** calls it "Distance, then ping" (it was "Nearest"); "Country, then ping", the old start, is still there.
 
 ## Shaper 3.2.2.8
 
