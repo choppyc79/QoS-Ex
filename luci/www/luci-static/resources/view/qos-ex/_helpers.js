@@ -760,6 +760,14 @@ return baseclass.extend({
 			home_radius_km: parseInt(g('home_radius_km'), 10) || 1000, ping_catch: g('ping_catch_ms') | 0,
 			base: g('base_ms') | 0 };
 	},
+	// The Ping preset a limit came from: the base ping the router measured
+	// at the pick (pingfilter.base_ms) + 80 = Casual, + 40 = Competitive;
+	// with no base (no answer, or a limit set before LuCI app 1.4.0.9) 80
+	// or 40. 0 = a limit of its own.
+	pfPreset: function(thr, base) {
+		thr = thr | 0; base = base | 0;
+		return thr > 0 && thr === base + 80 ? 80 : thr > 0 && thr === base + 40 ? 40 : 0;
+	},
 	// The mode in words, from a pf_servers reply or pfUci(): in full for
 	// the Dashboard, short for the banner, the Overview and the Status tile.
 	pfModeText: function(j, short) {
@@ -2039,10 +2047,13 @@ return baseclass.extend({
 			});
 			return E('label', { 'class': 'qx-mode-num' }, [ label + ' ', inp, ' ' + unit ]);
 		}
+		// The card in use shows no line of its own: the line above the cards
+		// (the Dashboard's pfModeText) says what runs. The others say what
+		// a click gives.
 		function card(on, label, sub, pick, ctl) {
 			return E('div', { 'class': 'qx-mode' + (on ? ' on' : '') }, [
 				E('button', { 'type': 'button', 'class': 'qx-mode-hd', 'aria-pressed': on ? 'true' : 'false',
-					'disabled': busy ? '' : null, 'click': on ? null : pick }, [ E('b', {}, label), E('span', {}, sub) ]),
+					'disabled': busy ? '' : null, 'click': on ? null : pick }, [ E('b', {}, label), on ? '' : E('span', {}, sub) ]),
 				on && ctl ? E('div', { 'class': 'qx-mode-ctl' }, ctl) : '' ]);
 		}
 		function paint() {
@@ -2054,11 +2065,9 @@ return baseclass.extend({
 			var s = JSON.stringify([ cur, thr, km, ctc, base, busy ]);
 			if (s === sig) return;
 			sig = s;
-			// The preset the limit came from: the base ping the router
-			// measured at the pick (pingfilter.base_ms) + 80 or + 40; with
-			// no base (no answer, or a limit set before 1.4.0.9) 80 or 40.
-			// 0 = a limit of its own. A pick measures the base again.
-			var pre = thr > 0 && thr === base + 80 ? 80 : thr > 0 && thr === base + 40 ? 40 : 0;
+			// The preset the limit came from (pfPreset). A pick measures the
+			// base again.
+			var pre = self.pfPreset(thr, base);
 			function preset(add, prof, label) {
 				return E('button', { 'type': 'button', 'class': 'btn cbi-button qx-pre' + (pre === add ? ' sel' : ''),
 					'aria-pressed': pre === add ? 'true' : 'false', 'disabled': busy ? '' : null,
@@ -2067,9 +2076,7 @@ return baseclass.extend({
 					[ E('b', {}, label), E('span', {}, _('base ping + %d ms').format(add)) ]);
 			}
 			dom.content(box, [
-				card(cur === 'ping', _('Ping'), !(thr > 0) ? _('Block servers over a ping limit')
-						: pre && base > 0 ? _('Block servers over %d ms (base ping %d + %d)').format(thr, base, pre)
-						: _('Block servers over %d ms').format(thr),
+				card(cur === 'ping', _('Ping'), thr > 0 ? _('Block servers over %d ms').format(thr) : _('Block servers over a ping limit'),
 					// Back to its own limit, or Casual when it has none.
 					function() { if (thr > 0) act('mode', 'ping', 0); else act('profile', 'casual', 0); },
 					[ preset(80, 'casual', _('Casual')), preset(40, 'competitive', _('Competitive')),
