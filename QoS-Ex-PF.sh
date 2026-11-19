@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.1.0.2"
+VERSION="2.1.0.3"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -6639,20 +6639,25 @@ pf_servers_json() {
 }
 
 # One-tap presets. Each writes UCI, reloads config and re-grades:
-#   competitive — ping mode, 40 ms limit
-#   casual      — ping mode, 80 ms limit
+#   competitive — ping mode, the line's base ping + 40 ms
+#   casual      — ping mode, the line's base ping + 80 ms
 #   distance    — distance mode (its radius and Ping Catch as they are)
 #   observe     — watch only: ping mode, no limit (graded and recorded; only
 #                 the blacklist and a country list block)
 #   custom      — report current settings, change nothing (also: no name)
+# The base ping is measured at each pick, as a server's ICMP is
+# (pf_rtt_icmp), to autosetup.ping_host (Auto Setup's idle-ping host): a
+# fixed limit leaves a line with a high base ping little room for its
+# region's servers. pingfilter.base_ms keeps it for LuCI's sum (nothing
+# else reads it); no answer = 40 / 80 alone, base_ms removed.
 # Only the mode and the ping presets' limit are written; never Ping Catch.
 # The user's own change: lands at once (PF_USER_NOW, inherited by the
 # background re-grade).
 pf_profile() {
-	local prof="$1" mode=ping thr=0 PF_USER_NOW=1
+	local prof="$1" mode=ping thr=0 add=0 base="" host="" lim="" PF_USER_NOW=1
 	case "$prof" in
-		competitive) thr=40 ;;
-		casual)      thr=80 ;;
+		competitive) add=40 ;;
+		casual)      add=80 ;;
 		distance)    mode=distance; thr="" ;;
 		observe)     ;;
 		custom|"")
@@ -6664,8 +6669,18 @@ pf_profile() {
 			return 1
 			;;
 	esac
+	if [ "$add" -gt 0 ]; then
+		host=$(uci -q get "$UCI_CFG.autosetup.ping_host")
+		base=$(pf_rtt_icmp "${host:-1.1.1.1}")
+		case "$base" in ''|*[!0-9]*) base="" ;; esac
+		thr=$(( ${base:-0} + add ))
+		[ "$thr" -le 5000 ] || thr=5000
+		lim=": $thr ms (base ping ${base:-not measured}${base:+ ms + $add})"
+	fi
 	uci set "$UCI_CFG.pingfilter.block_mode=$mode"
 	[ -n "$thr" ] && uci set "$UCI_CFG.pingfilter.threshold_ms=$thr"
+	if [ -n "$base" ]; then uci set "$UCI_CFG.pingfilter.base_ms=$base"
+	elif [ "$add" -gt 0 ]; then uci -q delete "$UCI_CFG.pingfilter.base_ms"; fi
 	uci commit "$UCI_CFG"
 	pf_load_config
 	# Limit changed without a reload: the hold rule follows.
@@ -6675,10 +6690,10 @@ pf_profile() {
 	#   - interactive CLI (stdout is a tty): run inline, keep the receipt
 	#   - rpc / scripted: detach to background, return immediately
 	if [ -t 1 ]; then
-		msg "profile '$prof' applied — re-grading cached servers"
+		msg "profile '$prof' applied$lim — re-grading cached servers"
 		pf_reclassify_now
 	else
-		msg "profile '$prof' applied — re-grading cached servers in background"
+		msg "profile '$prof' applied$lim — re-grading cached servers in background"
 		# exec form: plain `cmd >/dev/null &` keeps ash's saved copy of stdout
 		# open in the child, and the rpcd pipe would not close.
 		( _pf_title pf-reclassify; exec </dev/null >/dev/null 2>&1; pf_reclassify_now ) &
@@ -6919,6 +6934,7 @@ Usage: $0 {start|stop|restart|reload|status|servers|scan}
        $0 radius <km>             # distance mode
        $0 catch <ms>              # distance mode: also let in servers outside the radius at or under ms
        $0 profile <competitive|casual|distance|observe>
+                                  # competitive / casual: base ping + 40 / + 80 ms
        $0 profile                 # show the current profile
        $0 {whitelist|blacklist} <IPv4 | a.b.c.d/len>
        $0 forget <ip | a.b.c.d/len>
