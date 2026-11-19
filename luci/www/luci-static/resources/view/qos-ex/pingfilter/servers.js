@@ -79,10 +79,10 @@ return view.extend({
 			E('input', { 'type': 'text', 'id': 'pf-f-search', 'input': repaint,
 				'placeholder': _('Search IP, country, city or game…') }),
 			E('label', {}, [ _('Sort: '), E('select', { 'id': 'pf-f-sort', 'change': repaint }, [
+				E('option', { 'value': 'dist-asc' }, _('Distance, then ping')),
 				E('option', { 'value': 'country-ping' }, _('Country, then ping')),
 				E('option', { 'value': 'score-desc' }, _('Best grade first')),
 				E('option', { 'value': 'ping-desc' }, _('Highest ping')),
-				E('option', { 'value': 'dist-asc' }, _('Nearest')),
 				E('option', { 'value': 'ts-desc' }, _('Most recent')),
 				E('option', { 'value': 'state-asc' }, _('State')),
 				E('option', { 'value': 'ip-asc' }, _('IP'))
@@ -167,7 +167,7 @@ return view.extend({
 	renderTable: function() {
 		var view = this, refs = view.refs, tbody = refs.tbody;
 		var playIp = h.liveIp(view, view.data, view.actPps);
-		var st = view.st, so = refs.sort.value || 'country-ping';
+		var st = view.st, so = refs.sort.value || 'dist-asc';
 		var fs = (refs.search.value || '').toLowerCase();
 		var home = (isFinite(view.homeLat) && isFinite(view.homeLon) && !(view.homeLat === 0 && view.homeLon === 0))
 			? [ view.homeLat, view.homeLon ] : null;
