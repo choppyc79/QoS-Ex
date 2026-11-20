@@ -30,10 +30,12 @@ The Overview and the Live pages keep themselves up to date. The other live
 pages follow LuCI's refresh, which the **REFRESHING** switch at the top of
 LuCI pauses; the two Live pages have their own refresh selector.
 
-The banner above the tabs shows whether the shaper and the Ping Filter are
-on, whether a game is being played, the main figures for the tab you are
-on, and the branch and versions installed, for example
-`main · app v1.3.9.3 · PF v2.0.9.4 · shaper v3.2.1.0`.
+The banner above the tabs shows the QoS-Ex release installed beside the
+name (for example **QoS-Ex v1.1.0**), whether the shaper and the Ping Filter
+are on, whether a game is being played, the main figures for the tab you are
+on, and at the right the branch installed, `main` or `dev`. On `dev` the
+number is the last release: dev holds the changes made since. The version
+of each part is on **System → Maintenance → Versions & updates**.
 
 Colours follow your LuCI theme: green is on or healthy, red is off or a
 fault, yellow is a warning, and blue is a match being played.
