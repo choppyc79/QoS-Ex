@@ -455,9 +455,15 @@ main() {
 # branch switch from an update. A branch (main, dev) is also the one
 # updates follow from now on, as if picked on System -> Maintenance, so an
 # install with -b from SSH does not leave LuCI on the other one.
+# The release the manifest names ("#v release=1.1.0 ..."; on dev the last
+# one) is what the banner shows beside the name. A ref whose manifest names
+# none (one from before it, or no manifest) leaves none, not an old one.
 _ref_done() {
 	mkdir -p /etc/qos-ex 2>/dev/null
 	echo "$REF" > /etc/qos-ex/installed-ref 2>/dev/null
+	_rel=$(sed -n '1s/.* release=\([0-9][0-9.]*\).*/\1/p' "$TMP/SHA256SUMS" 2>/dev/null)
+	if [ -n "$_rel" ]; then echo "$_rel" > /etc/qos-ex/installed-release 2>/dev/null
+	else rm -f /etc/qos-ex/installed-release 2>/dev/null; fi
 	case "$REF" in main|dev)
 		[ -f /etc/config/qos-ex ] && [ "$(uci -q get qos-ex.settings.update_branch)" != "$REF" ] &&
 			uci -q set qos-ex.settings.update_branch="$REF" && uci -q commit qos-ex ;;
