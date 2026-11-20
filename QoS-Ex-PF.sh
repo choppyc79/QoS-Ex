@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.1.0.3"
+VERSION="2.1.0.4"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -1025,7 +1025,8 @@ pf_hs_listen() {
 		}'
 }
 
-# One listener, restarted when it died or the device list changed.
+# One listener, restarted when it died, or when the devices or the ignored
+# ports changed (PF_HS_SRC: what it was started with; it keeps both).
 # PF_HS_PID / PF_HS_SRC / PF_HS_T and PF_HS_DUE / PF_HS_DUE0 (_pf_hs_due)
 # are daemon globals.
 _pf_hs_stop() {
@@ -1040,7 +1041,8 @@ _pf_hs_tick() {
 		_pf_hs_quiet_off
 		return 0
 	fi
-	if [ -n "$PF_HS_PID" ] && [ "$PF_HS_SRC" = "$GAMING_IP4" ] \
+	local _k="$GAMING_IP4|$PF_IGNORE_AWK"
+	if [ -n "$PF_HS_PID" ] && [ "$PF_HS_SRC" = "$_k" ] \
 	   && kill -0 "$PF_HS_PID" 2>/dev/null; then
 		_pf_hs_quiet
 		return 0
@@ -1048,7 +1050,7 @@ _pf_hs_tick() {
 	local _n="${now:-$(date +%s)}"
 	# A listener dead within 10 s of starting (no conntrack events) is tried
 	# again once a minute, not every tick.
-	if [ -n "$PF_HS_PID" ] && [ "$PF_HS_SRC" = "$GAMING_IP4" ] \
+	if [ -n "$PF_HS_PID" ] && [ "$PF_HS_SRC" = "$_k" ] \
 	   && [ $((_n - ${PF_HS_T:-0})) -lt 10 ] 2>/dev/null; then
 		PF_HS_NEXT=$((_n + 60))
 		_pf_warn_once hsdead "ping filter: handshake listener (conntrack -E) exits at once - retried once a minute"
@@ -1057,7 +1059,7 @@ _pf_hs_tick() {
 	[ "$_n" -lt "${PF_HS_NEXT:-0}" ] 2>/dev/null && return 0
 	rm -f "$PF_RUN_DIR"/hs-* 2>/dev/null
 	( _pf_title pf-handshake; pf_hs_listen ) </dev/null >/dev/null 2>&1 &
-	PF_HS_PID=$!; PF_HS_SRC=$GAMING_IP4; PF_HS_T=$_n
+	PF_HS_PID=$!; PF_HS_SRC=$_k; PF_HS_T=$_n
 	# A flow a device opened before this listener is not heard.
 	PF_HS_DUE=0; PF_HS_DUE0=0
 }
@@ -1520,8 +1522,10 @@ _pf_hold_on() {
 _pf_table_body() {
 	local _PM _HOLD _pk="" _ignd="" _igns="" v6=0 g=$PF_GAMING_SET_NAME a=$PF_ALLOWED_SET_NAME b=$PF_SET_NAME
 	_pf_port_match
-	# The activity counters leave the ignored ports out, as discovery does:
-	# a call on them is not play.
+	# The ignored ports are outside the Ping Filter, by the port at the
+	# server's end (dport on the way out, sport on the way back): discovery
+	# and the hold leave them out (_PM), the activity counters too (a call on
+	# them is not play), and a block never drops them.
 	[ -n "$PF_IGNORE_NFT" ] && { _ignd=" udp dport != { $PF_IGNORE_NFT }"; _igns=" udp sport != { $PF_IGNORE_NFT }"; }
 	[ -n "$GAMING_IP6" ] && v6=1
 	echo "table $PF_FW_TABLE {"
@@ -1577,26 +1581,27 @@ _pf_table_body() {
 	[ "$v6" = 1 ] && \
 	echo "		ip6 saddr != @$PF_GAMING_SET_NAME6 ip6 daddr != @$PF_GAMING_SET_NAME6 return"
 	# Host verdicts first, then the listed prefixes (the scan gives a server
-	# inside one its own host entry; prefixes meet the first packet).
+	# inside one its own host entry; prefixes meet the first packet). A block
+	# drops the server's UDP on every port but the ignored ones.
 	echo "		ip saddr @$g ip daddr @$a return"
 	echo "		ip saddr @$a ip daddr @$g return"
-	echo "		ip saddr @$g ip daddr @$b meta l4proto udp counter drop"
-	echo "		ip saddr @$b ip daddr @$g meta l4proto udp counter drop"
+	echo "		ip saddr @$g ip daddr @$b meta l4proto udp$_ignd counter drop"
+	echo "		ip saddr @$b ip daddr @$g meta l4proto udp$_igns counter drop"
 	echo "		ip saddr @$g ip daddr @wl_net return"
 	echo "		ip saddr @wl_net ip daddr @$g return"
-	echo "		ip saddr @$g ip daddr @bl_net meta l4proto udp counter drop"
-	echo "		ip saddr @bl_net ip daddr @$g meta l4proto udp counter drop"
+	echo "		ip saddr @$g ip daddr @bl_net meta l4proto udp$_ignd counter drop"
+	echo "		ip saddr @bl_net ip daddr @$g meta l4proto udp$_igns counter drop"
 	# Ping Catch /24s (_pf_auto_nets): after the hosts and the lists, so a
 	# server's own verdict and the manual lists come first.
 	echo "		ip saddr @$g ip daddr @auto_ok return"
 	echo "		ip saddr @auto_ok ip daddr @$g return"
-	echo "		ip saddr @$g ip daddr @auto_bad meta l4proto udp counter drop"
-	echo "		ip saddr @auto_bad ip daddr @$g meta l4proto udp counter drop"
+	echo "		ip saddr @$g ip daddr @auto_bad meta l4proto udp$_ignd counter drop"
+	echo "		ip saddr @auto_bad ip daddr @$g meta l4proto udp$_igns counter drop"
 	if [ "$v6" = 1 ]; then
 		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 ip6 daddr @$PF_ALLOWED_SET_NAME6 return"
 		echo "		ip6 saddr @$PF_ALLOWED_SET_NAME6 ip6 daddr @$PF_GAMING_SET_NAME6 return"
-		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 ip6 daddr @$PF_SET_NAME6 meta l4proto udp counter drop"
-		echo "		ip6 saddr @$PF_SET_NAME6 ip6 daddr @$PF_GAMING_SET_NAME6 meta l4proto udp counter drop"
+		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 ip6 daddr @$PF_SET_NAME6 meta l4proto udp$_ignd counter drop"
+		echo "		ip6 saddr @$PF_SET_NAME6 ip6 daddr @$PF_GAMING_SET_NAME6 meta l4proto udp$_igns counter drop"
 	fi
 	# Hold: a game-port UDP packet to a public address with no verdict stops
 	# here; "first" only past the flow's first first_pkts packets (conntrack
@@ -6974,7 +6979,7 @@ Kernel side
   newly blocked server is deleted for the monitored devices. A block drops
   UDP only: TCP to the same address (logins, store) still passes.
   UDP ports in ignore_ports (now: ${PF_IGNORE_NFT:-none}) are never treated as
-  a game server.
+  a game server, and a block never drops them.
 
 How a new server is graded (ping mode)
   1. New servers: the first first_pkts (now ${PF_FIRST_PKTS:-2}) packets of
