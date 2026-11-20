@@ -488,8 +488,9 @@ server you are playing on: a block waits until that game is over.
     - **Grade from gameplay**: judge servers by the ping during real games.
     - **Lite (small routers)**.
   - **Network**:
-    - **Ignore UDP ports**: ports that are never game servers. Add your
-      voice chat's, for example Discord `50000-65535`.
+    - **Ignore UDP ports**: ports that are never game servers and that a
+      block never stops. Add your voice chat's, for example Discord
+      `50000-65535`.
     - **Look up locations**.
   - **Memory** — how many servers are kept, for how long, and how often the
     list is saved to flash.
