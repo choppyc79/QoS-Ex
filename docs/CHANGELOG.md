@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.0 · Ping Filter 2.1.0.4 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.1 · Ping Filter 2.1.0.4 · shaper 3.2.2.8**
+
+## LuCI app 1.4.1.1
+
+- Changed: the banner shows the QoS-Ex release installed beside the name (for example **QoS-Ex v1.1.0**) and only the branch, `main` or `dev`, at the right. The version of each part (LuCI app, Ping Filter, shaper) is still on **System → Maintenance → Versions & updates**. On `dev` the number is the last release, as dev holds the changes made since. The release manifest now names the release, and `QoS-Ex-install.sh` keeps the one it installed (`/etc/qos-ex/installed-release`), so the number shows from the first update with this installer on.
 
 ## Ping Filter 2.1.0.4
 
