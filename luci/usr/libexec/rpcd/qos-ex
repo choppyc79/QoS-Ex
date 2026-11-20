@@ -481,6 +481,12 @@ EOL
 					sed 1d "$_sc"
 				else
 					_out=$(emit_text "$QOS_EX_BIN" state)
+					# The release the last update installed (QoS-Ex-install.sh
+					# keeps the manifest's number), beside the name in the
+					# banner. Digits and dots only: anything else would break
+					# the reply's JSON, and every page polls it.
+					_rel=""; [ -r /etc/qos-ex/installed-release ] && read -r _rel < /etc/qos-ex/installed-release
+					case "$_rel" in ''|*[!0-9.]*) ;; *) _out="${_out%?},\"release\":\"$_rel\"}" ;; esac
 					printf '%s\n' "$_out"
 					{ printf '%s %s\n' "$_now" "$_cm"; printf '%s\n' "$_out"; } > "$_sc.$$" 2>/dev/null &&
 						mv -f "$_sc.$$" "$_sc" 2>/dev/null || rm -f "$_sc.$$" 2>/dev/null
