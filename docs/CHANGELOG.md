@@ -5,7 +5,12 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.0 · Ping Filter 2.1.0.3 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.0 · Ping Filter 2.1.0.4 · shaper 3.2.2.8**
+
+## Ping Filter 2.1.0.4
+
+- Fixed: a blocked server lost its UDP on every port, the **Ignore UDP ports** included, so a connection the Ping Filter never judges was cut whenever its server was blocked: for its traffic on another port, by an earlier block, by **Always block** or with its /24 under Ping Catch. It stayed cut while the block lasted. A block now drops every UDP port but the ignored ones (the server's port, both ways). A connection on an ignored port is still cut once when its server is first blocked; the device's next packet opens it again.
+- Fixed: the timing of the game's first exchange kept the **Ignore UDP ports** it started with until the Ping Filter restarted, so after a change there a port taken off the list was still not timed, and one added still was. It now starts again with the new list.
 
 ## LuCI app 1.4.1.0
 
