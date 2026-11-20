@@ -1538,9 +1538,9 @@ return baseclass.extend({
 
 	// The ONE banner, above the tab row on every page (in front of the
 	// theme's #tabmenu; in front of the view where a theme has none):
-	// "QoS-Ex – <main tab>", shaper and Ping Filter state, what is relevant
-	// to the tab, versions. The name is the MAIN tab's, whichever sub-tab is
-	// open. Fed by the light `state` call on a poll pageHead starts, or by
+	// "QoS-Ex v<release> / <main tab>", shaper and Ping Filter state, what is
+	// relevant to the tab, the branch. The name is the MAIN tab's, whichever
+	// sub-tab is open. Fed by the light `state` call on a poll pageHead starts, or by
 	// the view (o.fed, then h.barFeed) when the view polls `state` itself.
 	//
 	// A tab change is a full page load, so the banner is put up the moment
@@ -1596,8 +1596,11 @@ return baseclass.extend({
 		var ver = E('span', { 'class': 'qos-ex-hdr-tools qos-ex-muted' });
 		var page = E('span', { 'class': 'qx-hdr-page' }, MAIN[seg] || '');
 		page.hidden = !MAIN[seg];
+		// The release installed, beside the name: shown once a feed brings one.
+		var rel = E('span', { 'class': 'qx-hdr-rel' });
+		rel.hidden = true;
 		bar = E('div', { 'id': 'qos-ex-appbar', 'class': 'qos-ex-cmdbar qos-ex-hdr qos-ex-appbar' }, [
-			E('span', { 'class': 'qos-ex-hdr-title' }, [ 'QoS', E('span', { 'class': 'qx-acc' }, '-Ex'), page ]),
+			E('span', { 'class': 'qos-ex-hdr-title' }, [ 'QoS', E('span', { 'class': 'qx-acc' }, '-Ex'), rel, page ]),
 			pills, ver ]);
 		bar.qosExPage = page;
 		// Slots after the state pills: the tab's own (kind) and the view's.
@@ -1629,10 +1632,14 @@ return baseclass.extend({
 				: pill('idle', '⊙ ' + _('idle'), _('No gaming traffic')));
 			var s = JSON.stringify(out.map(function(n) { return n.className + n.textContent; }));
 			if (s !== sig) { sig = s; L.dom.content(pills, out); }
-			// The branch installed (main / dev) leads the versions, then the
-			// parts by module: app (1.x), Ping Filter (2.x), shaper (3.x).
-			self.setText(ver, (st.branch ? st.branch + ' · ' : '') + _('app') + ' __VERSION__' +
-				(st.pf_ver ? ' · PF v' + st.pf_ver : '') + ' · ' + _('shaper') + ' ' + (st.ver_tag || 'v') + st.version);
+			// The release the last update installed (the shim adds it to the
+			// reply; none before the first update that names one) beside the
+			// name, the branch (main / dev) at the right. Each part's version
+			// is on System -> Maintenance.
+			var rv = r && r.release ? 'v' + r.release : '';
+			self.setText(rel, rv);
+			rel.hidden = !rv;
+			self.setText(ver, st.branch || '');
 			bar.qosExSubs.forEach(function(fn) { fn(st); });
 		};
 		function place() {
