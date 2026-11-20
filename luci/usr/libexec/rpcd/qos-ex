@@ -299,6 +299,15 @@ emit_text() {
 	printf '"}\n'
 }
 
+# Reply $1 with the release the last update installed as its last key
+# (QoS-Ex-install.sh keeps the manifest's number): the banner (state) and
+# LuCI's Status tile (counters) show it beside the name. Digits and dots
+# only: anything else would break the JSON, and pages poll both.
+with_rel() {
+	_rel=""; [ -r /etc/qos-ex/installed-release ] && read -r _rel < /etc/qos-ex/installed-release
+	case "$_rel" in ''|*[!0-9.]*) printf '%s\n' "$1" ;; *) printf '%s\n' "${1%?},\"release\":\"$_rel\"}" ;; esac
+}
+
 # The tail of one log as {"output": ...}, read here: through qos-ex.sh, a poll
 # parsed a 240KB script to run one tail. $1 picks the file from a fixed set,
 # never a caller path: "pf" = the PF log (daemon + actions), "update" = the
@@ -480,13 +489,7 @@ EOL
 				if [ "$_m" = "$_cm" ] && [ $((_now - _t)) -ge 0 ] && [ $((_now - _t)) -lt 3 ]; then
 					sed 1d "$_sc"
 				else
-					_out=$(emit_text "$QOS_EX_BIN" state)
-					# The release the last update installed (QoS-Ex-install.sh
-					# keeps the manifest's number), beside the name in the
-					# banner. Digits and dots only: anything else would break
-					# the reply's JSON, and every page polls it.
-					_rel=""; [ -r /etc/qos-ex/installed-release ] && read -r _rel < /etc/qos-ex/installed-release
-					case "$_rel" in ''|*[!0-9.]*) ;; *) _out="${_out%?},\"release\":\"$_rel\"}" ;; esac
+					_out=$(with_rel "$(emit_text "$QOS_EX_BIN" state)")
 					printf '%s\n' "$_out"
 					{ printf '%s %s\n' "$_now" "$_cm"; printf '%s\n' "$_out"; } > "$_sc.$$" 2>/dev/null &&
 						mv -f "$_sc.$$" "$_sc" 2>/dev/null || rm -f "$_sc.$$" 2>/dev/null
@@ -494,8 +497,9 @@ EOL
 				;;
 			stats)      emit_text "$QOS_EX_BIN" stats ;;
 			# The counters alone (LuCI's Status tile, the Stats page's first
-			# load): live's block without the tc detail.
-			counters)   emit_text emit_counters ;;
+			# load): live's block without the tc detail, and the release for
+			# the tile's title.
+			counters)   with_rel "$(emit_text emit_counters)" ;;
 			# Stats and the Overview poll counters and the queue detail
 			# together: one call, one rpcd exec, instead of two every refresh.
 			# The detail comes straight from `tc -s -j` (emit_tc): CAKE
