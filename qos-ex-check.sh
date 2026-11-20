@@ -92,6 +92,13 @@ versions() {
 	else fail "LuCI app $v was not installed by /root/QoS-Ex-luci-app.sh ($(ver /root/QoS-Ex-luci-app.sh)) - run: sh /root/QoS-Ex-install.sh"; fi
 	[ -f /usr/lib/qos-ex/live.sh ] && pass "/usr/lib/qos-ex/live.sh present (light counters)" || fail "/usr/lib/qos-ex/live.sh missing"
 	info "update_branch=$(uci -q get qos-ex.settings.update_branch || echo unset), installed-ref=$(cat /etc/qos-ex/installed-ref 2>/dev/null || echo none)"
+	# LuCI app 1.4.1.1: the release the manifest named at the last installer
+	# run (installed-release) is what the banner shows beside the name.
+	rl=$(cat /etc/qos-ex/installed-release 2>/dev/null)
+	if [ -z "$rl" ]; then fail "no /etc/qos-ex/installed-release: the banner shows no release - run: sh /root/QoS-Ex-install.sh"
+	elif ! r=$(ubus call qos-ex state 2>/dev/null); then info "ubus call qos-ex state failed (rpcd)"
+	elif [ "$(jsonfilter -s "$r" -e '@.release' 2>/dev/null)" = "$rl" ]; then pass "the banner shows release v$rl (installed-release, LuCI app 1.4.1.1)"
+	else fail "the banner's release ($(jsonfilter -s "$r" -e '@.release' 2>/dev/null)) is not installed-release ($rl)"; fi
 	if r=$(ubus call qos-ex update_check 2>/dev/null); then
 		info "update check: branch=$(jsonfilter -s "$r" -e '@.branch' 2>/dev/null) installed=$(jsonfilter -s "$r" -e '@.installed' 2>/dev/null)" \
 			"latest luci=$(jsonfilter -s "$r" -e '@.luci' 2>/dev/null) pf=$(jsonfilter -s "$r" -e '@.pf' 2>/dev/null)" \
