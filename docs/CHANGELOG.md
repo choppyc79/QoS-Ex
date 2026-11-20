@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.1 · Ping Filter 2.1.0.4 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.2 · Ping Filter 2.1.0.4 · shaper 3.2.2.8**
+
+## LuCI app 1.4.1.2
+
+- Changed: the QoS-Ex box on LuCI's **Status → Overview** shows the QoS-Ex release installed beside its title (for example **QoS-Ex v1.1.0**), as the banner does.
 
 ## LuCI app 1.4.1.1
 
