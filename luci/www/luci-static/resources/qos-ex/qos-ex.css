@@ -1035,7 +1035,7 @@ details.qos-ex-raw > summary {
 .qos-ex-hdr-pills { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .qos-ex-hdr-pills .label { margin: 0; }
 .qos-ex-hdr-tools { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-/* The banner above the tab row (h.appBar): "QoS-Ex – <tab>", larger. */
+/* The banner above the tab row (h.appBar): "QoS-Ex v1.1.0 / <tab>", larger. */
 .qos-ex-appbar { margin: 0 0 12px 0; }
 .qos-ex-appbar .qos-ex-hdr-title { font-size: 20px; }
 .qos-ex-appbar .qos-ex-hdr-tools { font-size: 12px; }
@@ -1308,6 +1308,9 @@ details.qos-ex-raw > summary {
 .qos-ex-appbar .qos-ex-hdr-title { letter-spacing: .01em; }
 .qx-hdr-page { font-weight: normal; }
 .qx-hdr-page::before { content: "/"; margin: 0 .4em; opacity: .35; }
+/* The release installed beside the name ("QoS-Ex v1.1.0"), as quiet as the
+ * branch at the right. */
+.qx-hdr-rel { margin-left: .45em; font-size: .6em; font-weight: normal; letter-spacing: 0; color: var(--text-color-medium, #808080); }
 .qos-ex-card > .qos-ex-card-title::before,
 .qos-ex-scope .cbi-map > .cbi-section > h3::before { background: var(--qx-acc); }
 .qos-ex-tile, .pf-card { border-top-color: color-mix(in srgb, var(--qx-acc) 70%, transparent); }
