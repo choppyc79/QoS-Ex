@@ -99,6 +99,12 @@ versions() {
 	elif ! r=$(ubus call qos-ex state 2>/dev/null); then info "ubus call qos-ex state failed (rpcd)"
 	elif [ "$(jsonfilter -s "$r" -e '@.release' 2>/dev/null)" = "$rl" ]; then pass "the banner shows release v$rl (installed-release, LuCI app 1.4.1.1)"
 	else fail "the banner's release ($(jsonfilter -s "$r" -e '@.release' 2>/dev/null)) is not installed-release ($rl)"; fi
+	# LuCI app 1.4.1.2: the Status tile's title shows it too (the counters reply).
+	if [ -n "$rl" ] && r=$(ubus call qos-ex counters 2>/dev/null); then
+		r=$(jsonfilter -s "$r" -e '@.release' 2>/dev/null)
+		if [ "$r" = "$rl" ]; then pass "the Status tile shows release v$rl (the counters reply, LuCI app 1.4.1.2)"
+		else fail "the counters reply's release (${r:-none}) is not installed-release ($rl): the Status tile shows no release"; fi
+	fi
 	if r=$(ubus call qos-ex update_check 2>/dev/null); then
 		info "update check: branch=$(jsonfilter -s "$r" -e '@.branch' 2>/dev/null) installed=$(jsonfilter -s "$r" -e '@.installed' 2>/dev/null)" \
 			"latest luci=$(jsonfilter -s "$r" -e '@.luci' 2>/dev/null) pf=$(jsonfilter -s "$r" -e '@.pf' 2>/dev/null)" \
