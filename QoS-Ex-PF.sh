@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.1.0.2"
+VERSION="2.1.0.4"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -1025,7 +1025,8 @@ pf_hs_listen() {
 		}'
 }
 
-# One listener, restarted when it died or the device list changed.
+# One listener, restarted when it died, or when the devices or the ignored
+# ports changed (PF_HS_SRC: what it was started with; it keeps both).
 # PF_HS_PID / PF_HS_SRC / PF_HS_T and PF_HS_DUE / PF_HS_DUE0 (_pf_hs_due)
 # are daemon globals.
 _pf_hs_stop() {
@@ -1040,7 +1041,8 @@ _pf_hs_tick() {
 		_pf_hs_quiet_off
 		return 0
 	fi
-	if [ -n "$PF_HS_PID" ] && [ "$PF_HS_SRC" = "$GAMING_IP4" ] \
+	local _k="$GAMING_IP4|$PF_IGNORE_AWK"
+	if [ -n "$PF_HS_PID" ] && [ "$PF_HS_SRC" = "$_k" ] \
 	   && kill -0 "$PF_HS_PID" 2>/dev/null; then
 		_pf_hs_quiet
 		return 0
@@ -1048,7 +1050,7 @@ _pf_hs_tick() {
 	local _n="${now:-$(date +%s)}"
 	# A listener dead within 10 s of starting (no conntrack events) is tried
 	# again once a minute, not every tick.
-	if [ -n "$PF_HS_PID" ] && [ "$PF_HS_SRC" = "$GAMING_IP4" ] \
+	if [ -n "$PF_HS_PID" ] && [ "$PF_HS_SRC" = "$_k" ] \
 	   && [ $((_n - ${PF_HS_T:-0})) -lt 10 ] 2>/dev/null; then
 		PF_HS_NEXT=$((_n + 60))
 		_pf_warn_once hsdead "ping filter: handshake listener (conntrack -E) exits at once - retried once a minute"
@@ -1057,7 +1059,7 @@ _pf_hs_tick() {
 	[ "$_n" -lt "${PF_HS_NEXT:-0}" ] 2>/dev/null && return 0
 	rm -f "$PF_RUN_DIR"/hs-* 2>/dev/null
 	( _pf_title pf-handshake; pf_hs_listen ) </dev/null >/dev/null 2>&1 &
-	PF_HS_PID=$!; PF_HS_SRC=$GAMING_IP4; PF_HS_T=$_n
+	PF_HS_PID=$!; PF_HS_SRC=$_k; PF_HS_T=$_n
 	# A flow a device opened before this listener is not heard.
 	PF_HS_DUE=0; PF_HS_DUE0=0
 }
@@ -1520,8 +1522,10 @@ _pf_hold_on() {
 _pf_table_body() {
 	local _PM _HOLD _pk="" _ignd="" _igns="" v6=0 g=$PF_GAMING_SET_NAME a=$PF_ALLOWED_SET_NAME b=$PF_SET_NAME
 	_pf_port_match
-	# The activity counters leave the ignored ports out, as discovery does:
-	# a call on them is not play.
+	# The ignored ports are outside the Ping Filter, by the port at the
+	# server's end (dport on the way out, sport on the way back): discovery
+	# and the hold leave them out (_PM), the activity counters too (a call on
+	# them is not play), and a block never drops them.
 	[ -n "$PF_IGNORE_NFT" ] && { _ignd=" udp dport != { $PF_IGNORE_NFT }"; _igns=" udp sport != { $PF_IGNORE_NFT }"; }
 	[ -n "$GAMING_IP6" ] && v6=1
 	echo "table $PF_FW_TABLE {"
@@ -1577,26 +1581,27 @@ _pf_table_body() {
 	[ "$v6" = 1 ] && \
 	echo "		ip6 saddr != @$PF_GAMING_SET_NAME6 ip6 daddr != @$PF_GAMING_SET_NAME6 return"
 	# Host verdicts first, then the listed prefixes (the scan gives a server
-	# inside one its own host entry; prefixes meet the first packet).
+	# inside one its own host entry; prefixes meet the first packet). A block
+	# drops the server's UDP on every port but the ignored ones.
 	echo "		ip saddr @$g ip daddr @$a return"
 	echo "		ip saddr @$a ip daddr @$g return"
-	echo "		ip saddr @$g ip daddr @$b meta l4proto udp counter drop"
-	echo "		ip saddr @$b ip daddr @$g meta l4proto udp counter drop"
+	echo "		ip saddr @$g ip daddr @$b meta l4proto udp$_ignd counter drop"
+	echo "		ip saddr @$b ip daddr @$g meta l4proto udp$_igns counter drop"
 	echo "		ip saddr @$g ip daddr @wl_net return"
 	echo "		ip saddr @wl_net ip daddr @$g return"
-	echo "		ip saddr @$g ip daddr @bl_net meta l4proto udp counter drop"
-	echo "		ip saddr @bl_net ip daddr @$g meta l4proto udp counter drop"
+	echo "		ip saddr @$g ip daddr @bl_net meta l4proto udp$_ignd counter drop"
+	echo "		ip saddr @bl_net ip daddr @$g meta l4proto udp$_igns counter drop"
 	# Ping Catch /24s (_pf_auto_nets): after the hosts and the lists, so a
 	# server's own verdict and the manual lists come first.
 	echo "		ip saddr @$g ip daddr @auto_ok return"
 	echo "		ip saddr @auto_ok ip daddr @$g return"
-	echo "		ip saddr @$g ip daddr @auto_bad meta l4proto udp counter drop"
-	echo "		ip saddr @auto_bad ip daddr @$g meta l4proto udp counter drop"
+	echo "		ip saddr @$g ip daddr @auto_bad meta l4proto udp$_ignd counter drop"
+	echo "		ip saddr @auto_bad ip daddr @$g meta l4proto udp$_igns counter drop"
 	if [ "$v6" = 1 ]; then
 		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 ip6 daddr @$PF_ALLOWED_SET_NAME6 return"
 		echo "		ip6 saddr @$PF_ALLOWED_SET_NAME6 ip6 daddr @$PF_GAMING_SET_NAME6 return"
-		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 ip6 daddr @$PF_SET_NAME6 meta l4proto udp counter drop"
-		echo "		ip6 saddr @$PF_SET_NAME6 ip6 daddr @$PF_GAMING_SET_NAME6 meta l4proto udp counter drop"
+		echo "		ip6 saddr @$PF_GAMING_SET_NAME6 ip6 daddr @$PF_SET_NAME6 meta l4proto udp$_ignd counter drop"
+		echo "		ip6 saddr @$PF_SET_NAME6 ip6 daddr @$PF_GAMING_SET_NAME6 meta l4proto udp$_igns counter drop"
 	fi
 	# Hold: a game-port UDP packet to a public address with no verdict stops
 	# here; "first" only past the flow's first first_pkts packets (conntrack
@@ -6639,20 +6644,25 @@ pf_servers_json() {
 }
 
 # One-tap presets. Each writes UCI, reloads config and re-grades:
-#   competitive — ping mode, 40 ms limit
-#   casual      — ping mode, 80 ms limit
+#   competitive — ping mode, the line's base ping + 40 ms
+#   casual      — ping mode, the line's base ping + 80 ms
 #   distance    — distance mode (its radius and Ping Catch as they are)
 #   observe     — watch only: ping mode, no limit (graded and recorded; only
 #                 the blacklist and a country list block)
 #   custom      — report current settings, change nothing (also: no name)
+# The base ping is measured at each pick, as a server's ICMP is
+# (pf_rtt_icmp), to autosetup.ping_host (Auto Setup's idle-ping host): a
+# fixed limit leaves a line with a high base ping little room for its
+# region's servers. pingfilter.base_ms keeps it for LuCI's sum (nothing
+# else reads it); no answer = 40 / 80 alone, base_ms removed.
 # Only the mode and the ping presets' limit are written; never Ping Catch.
 # The user's own change: lands at once (PF_USER_NOW, inherited by the
 # background re-grade).
 pf_profile() {
-	local prof="$1" mode=ping thr=0 PF_USER_NOW=1
+	local prof="$1" mode=ping thr=0 add=0 base="" host="" lim="" PF_USER_NOW=1
 	case "$prof" in
-		competitive) thr=40 ;;
-		casual)      thr=80 ;;
+		competitive) add=40 ;;
+		casual)      add=80 ;;
 		distance)    mode=distance; thr="" ;;
 		observe)     ;;
 		custom|"")
@@ -6664,8 +6674,18 @@ pf_profile() {
 			return 1
 			;;
 	esac
+	if [ "$add" -gt 0 ]; then
+		host=$(uci -q get "$UCI_CFG.autosetup.ping_host")
+		base=$(pf_rtt_icmp "${host:-1.1.1.1}")
+		case "$base" in ''|*[!0-9]*) base="" ;; esac
+		thr=$(( ${base:-0} + add ))
+		[ "$thr" -le 5000 ] || thr=5000
+		lim=": $thr ms (base ping ${base:-not measured}${base:+ ms + $add})"
+	fi
 	uci set "$UCI_CFG.pingfilter.block_mode=$mode"
 	[ -n "$thr" ] && uci set "$UCI_CFG.pingfilter.threshold_ms=$thr"
+	if [ -n "$base" ]; then uci set "$UCI_CFG.pingfilter.base_ms=$base"
+	elif [ "$add" -gt 0 ]; then uci -q delete "$UCI_CFG.pingfilter.base_ms"; fi
 	uci commit "$UCI_CFG"
 	pf_load_config
 	# Limit changed without a reload: the hold rule follows.
@@ -6675,10 +6695,10 @@ pf_profile() {
 	#   - interactive CLI (stdout is a tty): run inline, keep the receipt
 	#   - rpc / scripted: detach to background, return immediately
 	if [ -t 1 ]; then
-		msg "profile '$prof' applied — re-grading cached servers"
+		msg "profile '$prof' applied$lim — re-grading cached servers"
 		pf_reclassify_now
 	else
-		msg "profile '$prof' applied — re-grading cached servers in background"
+		msg "profile '$prof' applied$lim — re-grading cached servers in background"
 		# exec form: plain `cmd >/dev/null &` keeps ash's saved copy of stdout
 		# open in the child, and the rpcd pipe would not close.
 		( _pf_title pf-reclassify; exec </dev/null >/dev/null 2>&1; pf_reclassify_now ) &
@@ -6919,6 +6939,7 @@ Usage: $0 {start|stop|restart|reload|status|servers|scan}
        $0 radius <km>             # distance mode
        $0 catch <ms>              # distance mode: also let in servers outside the radius at or under ms
        $0 profile <competitive|casual|distance|observe>
+                                  # competitive / casual: base ping + 40 / + 80 ms
        $0 profile                 # show the current profile
        $0 {whitelist|blacklist} <IPv4 | a.b.c.d/len>
        $0 forget <ip | a.b.c.d/len>
@@ -6958,7 +6979,7 @@ Kernel side
   newly blocked server is deleted for the monitored devices. A block drops
   UDP only: TCP to the same address (logins, store) still passes.
   UDP ports in ignore_ports (now: ${PF_IGNORE_NFT:-none}) are never treated as
-  a game server.
+  a game server, and a block never drops them.
 
 How a new server is graded (ping mode)
   1. New servers: the first first_pkts (now ${PF_FIRST_PKTS:-2}) packets of

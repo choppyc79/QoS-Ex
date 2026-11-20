@@ -30,17 +30,20 @@ The Overview and the Live pages keep themselves up to date. The other live
 pages follow LuCI's refresh, which the **REFRESHING** switch at the top of
 LuCI pauses; the two Live pages have their own refresh selector.
 
-The banner above the tabs shows whether the shaper and the Ping Filter are
-on, whether a game is being played, the main figures for the tab you are
-on, and the branch and versions installed, for example
-`main · app v1.3.9.3 · PF v2.0.9.4 · shaper v3.2.1.0`.
+The banner above the tabs shows the QoS-Ex release installed beside the
+name (for example **QoS-Ex v1.1.0**), whether the shaper and the Ping Filter
+are on, whether a game is being played, the main figures for the tab you are
+on, and at the right the branch installed, `main` or `dev`. On `dev` the
+number is the last release: dev holds the changes made since. The version
+of each part is on **System → Maintenance → Versions & updates**.
 
 Colours follow your LuCI theme: green is on or healthy, red is off or a
 fault, yellow is a warning, and blue is a match being played.
 
 LuCI's own **Status → Overview** page also gets a small QoS-Ex box with the
-same state and headline figures, and a link to Maintenance when an update is
-available. Its Ping Filter figures refresh every 30 seconds.
+release beside its title, the same state and headline figures, and a link to
+Maintenance when an update is available. Its Ping Filter figures refresh
+every 30 seconds.
 
 ---
 
@@ -336,10 +339,17 @@ The Ping Filter's main page. Along the top:
 The figure tiles (**Mode**, **Servers**, **Always allow / block**,
 **Watched devices**, **Allowed / blocked**) each link to where that is set.
 
-**Mode cards.** Click one to switch mode. Each mode keeps its own number.
+**Mode cards.** Click one to switch mode. Each mode keeps its own number. The
+line above the cards says what is running; the card in use shows only its
+controls, the others what a click gives you.
 
-- **Ping** — block servers whose ping is over a limit: **40 ms**, **80 ms**,
-  or your own **Ping limit** (1 to 5000 ms).
+- **Ping** — block servers whose ping is over a limit: **Casual** (your
+  base ping + 80 ms), **Competitive** (+ 40 ms), or your own **Ping limit**
+  (1 to 5000 ms). The router measures the base ping (its ping to 1.1.1.1)
+  each time you pick Casual or Competitive; the line above the cards shows
+  the sum.
+  Competitive shows a warning: a game with few servers that close may find
+  no match. Clicking **Ping** with no limit set picks Casual.
 - **Distance** — block servers further from home than your **Radius** (50 to
   20,000 km). **Ping Catch** (0 to 250 ms, 0 = off) also lets in servers
   outside the radius whose ping is at or under it.
@@ -434,8 +444,9 @@ above 800, the table shows the first 800 and the servers in use.
 
 - The chips show only allowed, blocked, always allowed, always blocked or
   cached (known from earlier) servers.
-- The list starts grouped by country, best ping first. **Sort** changes
-  that, and the search box finds an address, country, city or owner.
+- The list starts nearest first: by distance from your home location,
+  then by ping, with servers not located yet last. **Sort** changes that,
+  and the search box finds an address, country, city or owner.
 - A server on a game company's own network shows the company after its
   address (Riot Games, Valve, Blizzard, …).
 
@@ -480,8 +491,9 @@ server you are playing on: a block waits until that game is over.
     - **Grade from gameplay**: judge servers by the ping during real games.
     - **Lite (small routers)**.
   - **Network**:
-    - **Ignore UDP ports**: ports that are never game servers. Add your
-      voice chat's, for example Discord `50000-65535`.
+    - **Ignore UDP ports**: ports that are never game servers and that a
+      block never stops. Add your voice chat's, for example Discord
+      `50000-65535`.
     - **Look up locations**.
   - **Memory** — how many servers are kept, for how long, and how often the
     list is saved to flash.

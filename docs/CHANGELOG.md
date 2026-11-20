@@ -5,7 +5,36 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.0.7 · Ping Filter 2.1.0.2 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.2 · Ping Filter 2.1.0.4 · shaper 3.2.2.8**
+
+## LuCI app 1.4.1.2
+
+- Changed: the QoS-Ex box on LuCI's **Status → Overview** shows the QoS-Ex release installed beside its title (for example **QoS-Ex v1.1.0**), as the banner does.
+
+## LuCI app 1.4.1.1
+
+- Changed: the banner shows the QoS-Ex release installed beside the name (for example **QoS-Ex v1.1.0**) and only the branch, `main` or `dev`, at the right. The version of each part (LuCI app, Ping Filter, shaper) is still on **System → Maintenance → Versions & updates**. On `dev` the number is the last release, as dev holds the changes made since. The release manifest now names the release, and `QoS-Ex-install.sh` keeps the one it installed (`/etc/qos-ex/installed-release`), so the number shows from the first update with this installer on.
+
+## Ping Filter 2.1.0.4
+
+- Fixed: a blocked server lost its UDP on every port, the **Ignore UDP ports** included, so a connection the Ping Filter never judges was cut whenever its server was blocked: for its traffic on another port, by an earlier block, by **Always block** or with its /24 under Ping Catch. It stayed cut while the block lasted. A block now drops every UDP port but the ignored ones (the server's port, both ways). A connection on an ignored port is still cut once when its server is first blocked; the device's next packet opens it again.
+- Fixed: the timing of the game's first exchange kept the **Ignore UDP ports** it started with until the Ping Filter restarted, so after a change there a port taken off the list was still not timed, and one added still was. It now starts again with the new list.
+
+## LuCI app 1.4.1.0
+
+- Changed: on the Ping Filter **Dashboard** the mode card in use no longer repeats the line above the cards, which already says what is running; the other cards still say what a click gives you. The base ping sum of **Casual** and **Competitive** moved to that line (for example "Blocking servers over 85 ms (base ping 5 + 80)").
+
+## LuCI app 1.4.0.9
+
+- Changed: the Ping Filter **Dashboard**'s **Ping** card names its two presets, **Casual** (your base ping + 80 ms) and **Competitive** (+ 40 ms), shows the sum (for example "Block servers over 48 ms (base ping 8 + 40)"), and warns while Competitive is on that a game with few servers that close may find no match. Clicking **Ping** with no limit set now picks Casual (it was Competitive). Your own **Ping limit** works as before.
+
+## Ping Filter 2.1.0.3
+
+- Changed: the `competitive` and `casual` presets add 40 or 80 ms to your line's base ping, instead of being 40 or 80 ms flat. A flat limit left a line with a high base ping little room for its region's servers: on a 25 ms line, 40 ms was only 15 ms above the line itself. The router measures the base ping each time a preset is picked (its ping to `autosetup.ping_host`, 1.1.1.1, taken as a server's ping is), keeps it as `pingfilter.base_ms` and logs the sum (`profile 'competitive' applied: 48 ms (base ping 8 ms + 40)`). With no answer, the preset is 40 or 80 ms as before. A limit set before this update stays as it is until you pick again.
+
+## LuCI app 1.4.0.8
+
+- Changed: the Ping Filter **Servers** list now opens with the servers nearest your home first, and servers at the same distance by ping; servers not located yet come last. **Sort** calls it "Distance, then ping" (it was "Nearest"); "Country, then ping", the old start, is still there.
 
 ## Shaper 3.2.2.8
 

@@ -75,10 +75,16 @@ a mode card on the **Dashboard**:
 
 | Mode | What it does | Good for |
 |---|---|---|
-| **Ping** | Blocks servers whose ping is over your limit: 40 ms, 80 ms or your own **Ping limit** (1 to 5000 ms) | You know what ping you will accept. The lower the limit, the longer matchmaking may take |
+| **Ping** | Blocks servers whose ping is over your limit: **Casual** (your base ping + 80 ms), **Competitive** (+ 40 ms) or your own **Ping limit** (1 to 5000 ms) | You know what ping you will accept. The lower the limit, the longer matchmaking may take, and a limit under your region's servers can stop it finding a match at all |
 | **Distance** | Blocks servers further from home than your **Radius** (50 to 20,000 km) | Keeping games in your region, including on servers that do not answer ping |
 | **Distance** with **Ping Catch** | Lets in every server inside the radius, plus any outside it whose ping is at or under the catch (1 to 250 ms; 0 = off) | A tight radius that should still let in a fast server just outside it |
 | **Watch only** | Lists and grades servers; only **Always block** entries and a country list block | Seeing what you connect to before you block anything |
+
+**Casual** and **Competitive** add 80 or 40 ms to your line's base ping, which
+the router measures each time you pick one (its ping to 1.1.1.1, the address
+Auto Setup's speed test pings); the line above the cards shows the sum.
+Competitive shows a warning: a game with few servers that close may find no
+match. Clicking **Ping** with no limit set picks Casual.
 
 A change on the Dashboard or the Map applies at once, even to the server you
 are playing on; a warning shows while a match is on. Each mode keeps its own
@@ -97,9 +103,10 @@ unpin), or use **Add a server** with an address or a range such as
 ### Keep voice chat out of the server list
 
 **Settings → Advanced options → Network → Ignore UDP ports**: ports never
-treated as game servers, and a call on them does not count as a game. The
-default `3478-3481` covers STUN and party chat. Add your voice chat's
-ports, e.g. Discord `50000-65535`, unless your game uses them.
+treated as game servers, and a call on them does not count as a game. A
+blocked server still gets its traffic on them. The default `3478-3481`
+covers STUN and party chat. Add your voice chat's ports, e.g. Discord
+`50000-65535`, unless your game uses them.
 
 ### Switch to another game
 
@@ -230,8 +237,9 @@ qos-ex.sh pingfilter enable
 `enable` refuses, and says why, until a device is watched and the home is
 set. `qos-ex.sh pingfilter disable` turns it off.
 
-**Pick a mode.** A preset, one of `competitive` (40 ms), `casual` (80 ms),
-`distance` or `observe` (Watch only); or the values themselves:
+**Pick a mode.** A preset, one of `competitive` (your base ping + 40 ms),
+`casual` (base ping + 80 ms), `distance` or `observe` (Watch only); or the
+values themselves:
 
 ```sh
 qos-ex.sh pingfilter profile casual
@@ -289,6 +297,7 @@ range-checks every number.
 | `pf_devices` | *(list)* | Which gaming devices are watched (**Watched devices**): a gaming device's MAC or IPv4 address. You tick them; a device that stops being Gaming is dropped. **Empty = none** |
 | `block_mode` | `ping` | `ping` or `distance` |
 | `threshold_ms` | `0` | Ping limit, 0–5000. `0` = Watch only: only the Always block list and a country list block |
+| `base_ms` | *(empty)* | Your base ping as **Casual** / **Competitive** last measured it (the router's ping to `autosetup.ping_host`); their limit is it + 80 / + 40 ms. Written by them; the filter itself does not read it |
 | `home_lat` / `home_lon` | *(empty)* | Your location |
 | `home_radius_km` | `1000` | Distance-mode radius, 50–20000 |
 | `ping_catch_ms` | `0` | Distance mode, 0–250: outside the radius, servers whose ping is at or under this are let in too. Inside the radius every server is. `0` = the radius alone decides |
@@ -296,7 +305,7 @@ range-checks every number.
 | `first_pkts` | `2` | With a ping limit or Ping Catch: packets of a new server's flow let through so the game's first exchange is timed; the rest wait until it is graded (0–20). Only flows your device opens are held. `0` = no hold: a new server is let through until graded. Not in the web app |
 | `whitelist` / `blacklist` | *(lists)* | **Always allow** / **Always block**: an address or a range (`1.2.3.0/24`) |
 | `allow_country` | *(list)* | Country names as the server list shows them (`United Kingdom`). When set, servers elsewhere are blocked |
-| `ignore_ports` | `3478-3481` | UDP ports never treated as game servers, and not counted as play. Add your voice-chat ports (e.g. Discord 50000-65535) unless your game's servers use them |
+| `ignore_ports` | `3478-3481` | UDP ports (the server's port) never treated as game servers, not counted as play, and never blocked. Add your voice-chat ports (e.g. Discord 50000-65535) unless your game's servers use them |
 | `auto_pin` | `2` | 0–20. Once a /24 holds this many Always allow (or Always block) servers, new ones in it join the list. With Ping Catch, a server without its own ping goes with the measured servers in its /24 and area (150 km): more under the catch than confirmed over, with one of them in its /24 or this many in the area, lets it in; this many confirmed over (the game's exchange over the catch on two connects, or a country not allowed) and none under keeps it out. 0 = off |
 | `geoip_lookup` | `yes` | Look up server locations. New servers' addresses go to `get.geojs.io` together, up to 50 in one HTTPS request; any it cannot place to a city are sent one by one to the lookup services, in turn until one answers: `ipwho.is`, `get.geojs.io`, `freeipapi.com`, `ipapi.co` (all HTTPS), then `geoip_api`. `no` = no lookups: servers have no map position, and distance mode has no location to work from |
 | `geoip_api` | `http://ip-api.com/json` | The last lookup service (plain HTTP). Set it to a service of your own and only that one is asked |

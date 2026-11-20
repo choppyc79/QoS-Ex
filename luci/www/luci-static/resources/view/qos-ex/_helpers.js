@@ -757,7 +757,16 @@ return baseclass.extend({
 	pfUci: function() {
 		function g(k) { return uci.get('qos-ex', 'pingfilter', k); }
 		return { block_mode: g('block_mode') || 'ping', threshold: g('threshold_ms') | 0,
-			home_radius_km: parseInt(g('home_radius_km'), 10) || 1000, ping_catch: g('ping_catch_ms') | 0 };
+			home_radius_km: parseInt(g('home_radius_km'), 10) || 1000, ping_catch: g('ping_catch_ms') | 0,
+			base: g('base_ms') | 0 };
+	},
+	// The Ping preset a limit came from: the base ping the router measured
+	// at the pick (pingfilter.base_ms) + 80 = Casual, + 40 = Competitive;
+	// with no base (no answer, or a limit set before LuCI app 1.4.0.9) 80
+	// or 40. 0 = a limit of its own.
+	pfPreset: function(thr, base) {
+		thr = thr | 0; base = base | 0;
+		return thr > 0 && thr === base + 80 ? 80 : thr > 0 && thr === base + 40 ? 40 : 0;
 	},
 	// The mode in words, from a pf_servers reply or pfUci(): in full for
 	// the Dashboard, short for the banner, the Overview and the Status tile.
@@ -1529,9 +1538,9 @@ return baseclass.extend({
 
 	// The ONE banner, above the tab row on every page (in front of the
 	// theme's #tabmenu; in front of the view where a theme has none):
-	// "QoS-Ex – <main tab>", shaper and Ping Filter state, what is relevant
-	// to the tab, versions. The name is the MAIN tab's, whichever sub-tab is
-	// open. Fed by the light `state` call on a poll pageHead starts, or by
+	// "QoS-Ex v<release> / <main tab>", shaper and Ping Filter state, what is
+	// relevant to the tab, the branch. The name is the MAIN tab's, whichever
+	// sub-tab is open. Fed by the light `state` call on a poll pageHead starts, or by
 	// the view (o.fed, then h.barFeed) when the view polls `state` itself.
 	//
 	// A tab change is a full page load, so the banner is put up the moment
@@ -1587,8 +1596,11 @@ return baseclass.extend({
 		var ver = E('span', { 'class': 'qos-ex-hdr-tools qos-ex-muted' });
 		var page = E('span', { 'class': 'qx-hdr-page' }, MAIN[seg] || '');
 		page.hidden = !MAIN[seg];
+		// The release installed, beside the name: shown once a feed brings one.
+		var rel = E('span', { 'class': 'qx-hdr-rel' });
+		rel.hidden = true;
 		bar = E('div', { 'id': 'qos-ex-appbar', 'class': 'qos-ex-cmdbar qos-ex-hdr qos-ex-appbar' }, [
-			E('span', { 'class': 'qos-ex-hdr-title' }, [ 'QoS', E('span', { 'class': 'qx-acc' }, '-Ex'), page ]),
+			E('span', { 'class': 'qos-ex-hdr-title' }, [ 'QoS', E('span', { 'class': 'qx-acc' }, '-Ex'), rel, page ]),
 			pills, ver ]);
 		bar.qosExPage = page;
 		// Slots after the state pills: the tab's own (kind) and the view's.
@@ -1620,10 +1632,14 @@ return baseclass.extend({
 				: pill('idle', '⊙ ' + _('idle'), _('No gaming traffic')));
 			var s = JSON.stringify(out.map(function(n) { return n.className + n.textContent; }));
 			if (s !== sig) { sig = s; L.dom.content(pills, out); }
-			// The branch installed (main / dev) leads the versions, then the
-			// parts by module: app (1.x), Ping Filter (2.x), shaper (3.x).
-			self.setText(ver, (st.branch ? st.branch + ' · ' : '') + _('app') + ' __VERSION__' +
-				(st.pf_ver ? ' · PF v' + st.pf_ver : '') + ' · ' + _('shaper') + ' ' + (st.ver_tag || 'v') + st.version);
+			// The release the last update installed (the shim adds it to the
+			// reply; none before the first update that names one) beside the
+			// name, the branch (main / dev) at the right. Each part's version
+			// is on System -> Maintenance.
+			var rv = r && r.release ? 'v' + r.release : '';
+			self.setText(rel, rv);
+			rel.hidden = !rv;
+			self.setText(ver, st.branch || '');
 			bar.qosExSubs.forEach(function(fn) { fn(st); });
 		};
 		function place() {
@@ -1993,8 +2009,9 @@ return baseclass.extend({
 	},
 
 	// The three modes as cards, for the setup card and the Dashboard: Ping
-	// (40 / 80 or its own limit), Distance (radius, Ping Catch, Set on Map)
-	// and Watch only. A pick acts at once (pf_action) and keeps the other
+	// (Casual / Competitive = the base ping + 80 / + 40 ms, or its own
+	// limit), Distance (radius, Ping Catch, Set on Map) and Watch only.
+	// A pick acts at once (pf_action) and keeps the other
 	// mode's number. A number commits on change, 500 ms later, so one edit
 	// is one reload. The cards are disabled while a call runs, then repaint
 	// from a fresh UCI. o.done runs after each change; o.map: on the Map.
@@ -2037,32 +2054,44 @@ return baseclass.extend({
 			});
 			return E('label', { 'class': 'qx-mode-num' }, [ label + ' ', inp, ' ' + unit ]);
 		}
+		// The card in use shows no line of its own: the line above the cards
+		// (the Dashboard's pfModeText) says what runs. The others say what
+		// a click gives.
 		function card(on, label, sub, pick, ctl) {
 			return E('div', { 'class': 'qx-mode' + (on ? ' on' : '') }, [
 				E('button', { 'type': 'button', 'class': 'qx-mode-hd', 'aria-pressed': on ? 'true' : 'false',
-					'disabled': busy ? '' : null, 'click': on ? null : pick }, [ E('b', {}, label), E('span', {}, sub) ]),
+					'disabled': busy ? '' : null, 'click': on ? null : pick }, [ E('b', {}, label), on ? '' : E('span', {}, sub) ]),
 				on && ctl ? E('div', { 'class': 'qx-mode-ctl' }, ctl) : '' ]);
 		}
 		function paint() {
 			// Not from a config that is being read again: pfUci() would give
 			// the defaults (Watch only).
 			if (self.uciBusy()) return;
-			var c = self.pfUci(), thr = c.threshold, km = c.home_radius_km, ctc = c.ping_catch;
+			var c = self.pfUci(), thr = c.threshold, km = c.home_radius_km, ctc = c.ping_catch, base = c.base;
 			var cur = c.block_mode === 'distance' ? 'distance' : thr > 0 ? 'ping' : 'watch';
-			var s = JSON.stringify([ cur, thr, km, ctc, busy ]);
+			var s = JSON.stringify([ cur, thr, km, ctc, base, busy ]);
 			if (s === sig) return;
 			sig = s;
-			function quick(ms, prof, title) {
-				return E('button', { 'type': 'button', 'class': 'btn cbi-button qx-mini' + (thr === ms ? ' sel' : ''),
-					'title': title, 'disabled': busy ? '' : null,
-					'click': function() { if (thr !== ms) act('profile', prof, 0); } }, ms + ' ms');
+			// The preset the limit came from (pfPreset). A pick measures the
+			// base again.
+			var pre = self.pfPreset(thr, base);
+			function preset(add, prof, label) {
+				return E('button', { 'type': 'button', 'class': 'btn cbi-button qx-pre' + (pre === add ? ' sel' : ''),
+					'aria-pressed': pre === add ? 'true' : 'false', 'disabled': busy ? '' : null,
+					'title': _('Measures your base ping, then sets the limit'),
+					'click': function() { act('profile', prof, 0); } },
+					[ E('b', {}, label), E('span', {}, _('base ping + %d ms').format(add)) ]);
 			}
 			dom.content(box, [
 				card(cur === 'ping', _('Ping'), thr > 0 ? _('Block servers over %d ms').format(thr) : _('Block servers over a ping limit'),
-					// Back to its own limit, or Competitive when it has none.
-					function() { if (thr > 0) act('mode', 'ping', 0); else act('profile', 'competitive', 0); },
-					[ quick(40, 'competitive', _('Competitive')), quick(80, 'casual', _('Casual')),
-						num('threshold', 1, 5000, 'ms', _('Ping limit'), 'threshold') ]),
+					// Back to its own limit, or Casual when it has none.
+					function() { if (thr > 0) act('mode', 'ping', 0); else act('profile', 'casual', 0); },
+					[ preset(80, 'casual', _('Casual')), preset(40, 'competitive', _('Competitive')),
+						num('threshold', 1, 5000, 'ms', _('Ping limit'), 'threshold'),
+						pre === 40 ? E('div', { 'class': 'qos-ex-warn-text qx-pre-note' },
+							_('Tight: games with few servers this close may find no match. If matchmaking fails, pick Casual.')) : '',
+						pre && !(base > 0) ? E('div', { 'class': 'qos-ex-muted qx-pre-note' },
+							_('Base ping not measured: pick again to measure it.')) : '' ]),
 				card(cur === 'distance', _('Distance'), _('Block servers outside %d km').format(km) +
 						(ctc > 0 ? ' · ' + _('Ping Catch ≤ %d ms').format(ctc) : ''),
 					function() { act('mode', 'distance', 0); },

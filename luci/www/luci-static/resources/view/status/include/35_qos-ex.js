@@ -10,7 +10,8 @@
 // switched that one off).
 // LuCI calls load() and render() again on every poll, so the last counter
 // sample is kept on the instance: a rate needs two. The update check is
-// asked once an hour (the router answers from its own 1 h cache).
+// asked once an hour (the router answers from its own 1 h cache). The
+// release installed comes with the counters and goes beside LuCI's title.
 return baseclass.extend({
 	title: _('QoS-Ex'),
 
@@ -77,7 +78,7 @@ return baseclass.extend({
 		self.liveIp = lv ? lv.ip : null;
 		var mode = h.pfModeText(pf, true);
 
-		return E('div', {}, [
+		var root = E('div', {}, [
 			h.cssCopy(),
 			E('div', { 'style': 'display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px' }, [
 				pill(running ? 'on' : 'off', '\u25cf ' + (running ? _('Shaping') + ' \u00b7 ' + String(m.qdisc || g('settings', 'qdisc') || '').toUpperCase()
@@ -99,5 +100,30 @@ return baseclass.extend({
 					lv ? (lv.ping > 0 ? lv.ping + ' ms \u00b7 ' : '') + (lv.state || '') : pfOn ? _('no game server') : '')
 			])
 		]);
+		// LuCI puts the tile in the page as soon as render returns.
+		var rel = d[1] && d[1].release ? 'v' + d[1].release : '';
+		Promise.resolve().then(function() { self.putRel(root, rel); });
+		return root;
+	},
+
+	// "QoS-Ex v1.1.0", as in the banner. The title is LuCI's h3 over the
+	// tile: 24.10 <h3>QoS-Ex</h3>, 25.12 a flex row of the title and its
+	// Hide button. The title text and the number go into one span, so that
+	// row keeps two items. A hidden tile is not in the page: its title
+	// gets the number once the tile is shown.
+	putRel: function(root, rel) {
+		var sec = root.parentNode && root.parentNode.parentNode,
+			t = sec && sec.querySelector(':scope > h3, :scope > .cbi-title > h3'),
+			s = t && t.querySelector('.qx-hdr-rel');
+		if (!t) return;
+		if (!s) {
+			var txt = t.firstChild, w = E('span');
+			if (!txt || txt.nodeType !== 3) return;
+			t.insertBefore(w, txt);
+			w.appendChild(txt);
+			s = w.appendChild(E('span', { 'class': 'qx-hdr-rel' }));
+		}
+		h.setText(s, rel);
+		s.hidden = !rel;
 	}
 });

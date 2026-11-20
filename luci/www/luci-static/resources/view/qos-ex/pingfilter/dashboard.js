@@ -232,6 +232,10 @@ return view.extend({
 		var curThr = (j.threshold | 0);
 		var curMode = j.block_mode || 'ping';
 		var curCatch = (j.ping_catch | 0);
+		// A Ping preset's sum joins the line above the cards: the card in
+		// use shows no line of its own (pfModes).
+		var pfu = h.pfUci(), pre = curMode === 'distance' ? 0 : h.pfPreset(curThr, pfu.base);
+		var modeLine = h.pfModeText(j) + (pre && pfu.base > 0 ? ' ' + _('(base ping %d + %d)').format(pfu.base, pre) : '');
 		view.modes.qxPaint();
 		view.warn.qxSet(pfOn && j.activity === 'active');
 
@@ -388,7 +392,7 @@ return view.extend({
 			tiles,
 			E('div', { 'class': 'cbi-section qos-ex-card pf2-hero' }, [
 				E('div', { 'class': 'pf2-state' }, [
-					E('div', {}, [ h.pfModeText(j) ]),
+					E('div', {}, [ modeLine ]),
 					masterNote,
 					v6Note,
 					view.warn
