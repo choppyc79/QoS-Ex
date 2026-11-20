@@ -41,8 +41,9 @@ Colours follow your LuCI theme: green is on or healthy, red is off or a
 fault, yellow is a warning, and blue is a match being played.
 
 LuCI's own **Status → Overview** page also gets a small QoS-Ex box with the
-same state and headline figures, and a link to Maintenance when an update is
-available. Its Ping Filter figures refresh every 30 seconds.
+release beside its title, the same state and headline figures, and a link to
+Maintenance when an update is available. Its Ping Filter figures refresh
+every 30 seconds.
 
 ---
 
