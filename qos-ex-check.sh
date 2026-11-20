@@ -437,8 +437,15 @@ pingfilter() {
 			n1=$(printf '%s\n' "$c1" | grep -c pf_udp); k1=$(printf '%s\n' "$c1" | grep pf_udp | grep -c -E '[ds]port != ')
 			[ "$n1" -gt 0 ] && [ "$k1" = "$n1" ] && pass "the activity counters leave out the ignored ports, as discovery does (2.0.9.9)" \
 				|| fail "the activity counters count the ignored ports ($k1 of $n1 counter rules leave them out)"
+			# 2.1.0.4: a block leaves them alone too, by the port at the server's
+			# end (dport on the way out, sport on the way back).
+			c2=$(nft list chain inet qos_ex_pf enforce 2>/dev/null | grep ' drop' | grep -v pf-hold)
+			n2=$(printf '%s\n' "$c2" | grep -c ' drop')
+			k2=$(printf '%s\n' "$c2" | grep -c -E 'saddr @pf_gaming_src6? .*udp dport != |daddr @pf_gaming_src6? .*udp sport != ')
+			if [ "$n2" -gt 0 ] && [ "$k2" = "$n2" ]; then pass "a block leaves the ignored ports alone ($n2 block rules, 2.1.0.4)"
+			else fail "a block drops the ignored ports ($k2 of $n2 block rules leave them out)"; fi
 		else
-			info "no ignored ports: nothing to leave out of the activity counters"
+			info "no ignored ports: nothing to leave out of the activity counters or the blocks"
 		fi
 		case "$(nft list chain inet qos_ex_pf enforce 2>/dev/null | grep pf-hold)" in
 			*'ct direction original ct original packets'*) pass "first-packets hold: only flows the device opened (2.0.9.9)" ;;
@@ -512,6 +519,18 @@ pingfilter() {
 				1) fail "the Ping Filter says its handshake listener hears nothing (hs_quiet=1, 2.1.0.2)" ;;
 				*) info "hs_quiet not reported (a Ping Filter older than 2.1.0.2)" ;;
 			esac
+			# 2.1.0.4: the listener leaves out the Ignore UDP ports set now (it
+			# keeps the list it started with: a change starts it again).
+			lp=""; li=""
+			for p in /proc/[0-9]*; do
+				c=""; { read -r c < "$p/comm"; } 2>/dev/null; [ "$c" = awk ] || continue
+				tr '\0' '\n' < "$p/cmdline" 2>/dev/null | grep -qx 'qos_ex_pf=handshake' || continue
+				lp=${p#/proc/}; li=$(tr '\0' '\n' < "$p/cmdline" 2>/dev/null | sed -n 's/^ign=//p'); break
+			done
+			li=$(printf '%s\n' "$li" | awk '{ for (i = 1; i <= NF; i++) { split($i, q, "-"); s = s (s == "" ? "" : ", ") (q[1] == q[2] ? q[1] : $i) } } END { print s }')
+			if [ -z "$lp" ]; then info "the handshake listener is not running now"
+			elif [ "$li" = "$(pfk ignore_ports)" ]; then pass "the handshake listener leaves out the Ignore UDP ports set now: ${li:-none} (2.1.0.4)"
+			else fail "the handshake listener leaves out older Ignore UDP ports: ${li:-none}; set now: $(pfk ignore_ports)"; fi
 		else
 			info "handshake timing off (hs_rtt=$(pfk hs_rtt): Lite, or no conntrack tool)"
 		fi
