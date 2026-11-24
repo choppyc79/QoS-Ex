@@ -372,7 +372,7 @@ A ping is shown as **measured** (by ping, or by timing the game's first
 exchange with the server, the handshake) or as an **estimate**, for a
 server measured neither way yet.
 
-**Played servers** — every server you have played on, with its grade, play
+**Graded servers** — every server you have played on, with its grade, play
 time and when you last played on it. Click one for the detail:
 
 - how its score is made up, its verdict, and where its ping came from;
