@@ -379,7 +379,10 @@ time and when you last played on it. Click one for the detail:
 - its distance from home, jitter, stutter, packet rate and time played;
 - its last five matches.
 
-**×** clears a server's history.
+**×** takes a server off this card and drops the jitter and stutter it was
+graded on. Its ping, verdict and past matches stay: play on it again and it
+is graded on fresh jitter and stutter, with its old matches back in its
+detail.
 
 | Grade | Score |
 |---|---|
