@@ -151,6 +151,14 @@ Dashboard then says **Handshake timing gets no conntrack events**. Over
 SSH, `rmmod nf_conntrack_netlink && modprobe nf_conntrack_netlink`, or a
 reboot, brings them back.
 
+**The Dashboard says Conntrack on this router prints no usable times.** On
+a router with a 32-bit CPU (many MIPS and ARM routers), the conntrack tool
+of OpenWrt 24.10 and 25.12 prints the time of each event with no usable
+fraction of a second, so the game's first exchange cannot be timed. The
+Ping Filter times none on that router and grades servers on their ping
+from the router and on estimates; a server that ignores ping keeps its
+estimate (~).
+
 **A game over IPv6 is not filtered.** Ping Filter grades IPv4 servers only;
 the Dashboard warns when a watched device has a public IPv6 address. Turn
 IPv6 off for that device (no IPv6 lease for it on the router).
@@ -179,7 +187,10 @@ Ping Filter log on **System → Logs**.
    servers first: the lowest in its /24, then the median of those within
    150 km (ICMP and the game's exchange alike); then earlier readings in its
    /24, then its distance. An estimate is the last resort: the game's first
-   exchange replaces it.
+   exchange replaces it. A first exchange under 2 ms is not a round trip
+   and is not used, and no reading under 2 ms goes into an estimate. On a
+   router whose conntrack prints no usable times (a 32-bit build) the first
+   exchange is not timed.
 3. **A reading only lowers the figure.** One slow ping does not block a
    server that measured under the limit. **Re-check cache** and play can
    raise it. The game's first exchange over the limit, on a server whose
