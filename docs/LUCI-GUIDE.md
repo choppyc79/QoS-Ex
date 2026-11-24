@@ -401,6 +401,11 @@ These warnings can appear:
   longer reports new connections to the Ping Filter, so a server that
   ignores ping is not measured and keeps its estimate (~). Its link opens
   the Ping Filter log, which says how to bring the events back.
+- **Conntrack on this router prints no usable times**: a fault of 32-bit
+  builds of the router's conntrack tool (OpenWrt 24.10 and 25.12). The
+  Ping Filter then does not time the game's first exchange: servers are
+  graded on their ping from the router, and one that ignores ping keeps
+  its estimate (~).
 
 ### Map
 

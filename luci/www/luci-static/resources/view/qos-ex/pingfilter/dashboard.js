@@ -428,6 +428,12 @@ return view.extend({
 				_('Handshake timing gets no conntrack events, so servers that ignore ping stay on estimates (~). See the Ping Filter log on '),
 				E('a', { 'href': L.url('admin', 'network', 'qos-ex', 'system', 'logs') }, _('System \u2192 Logs')), '.' ]));
 
+		// Conntrack on this router prints its times with no usable fraction of
+		// a second (a fault of 32-bit builds): no first exchange is timed.
+		if (pfOn && (j.hs_bad | 0))
+			els.push(E('div', { 'class': 'pf2-learn' },
+				_('Conntrack on this router prints no usable times (a fault of 32-bit builds), so the first exchange of a game is not timed: servers are graded on their ping from the router, and one that ignores ping keeps its estimate (~).')));
+
 		// "Now playing" — the single server we are actively gaming on: the
 		// connected server carrying CONTINUOUS game UDP right now (pickLive:
 		// highest pps wins, score only breaks ties), not merely a recent

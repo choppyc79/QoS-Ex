@@ -544,6 +544,33 @@ pingfilter() {
 			if [ -z "$lp" ]; then info "the handshake listener is not running now"
 			elif [ "$li" = "$(pfk ignore_ports)" ]; then pass "the handshake listener leaves out the Ignore UDP ports set now: ${li:-none} (2.1.0.4)"
 			else fail "the handshake listener leaves out older Ignore UDP ports: ${li:-none}; set now: $(pfk ignore_ports)"; fi
+			# 2.1.0.5: a 32-bit conntrack 1.4.8 prints its event times with no
+			# usable fraction of a second (its 64-bit time to a 32-bit %ld): the
+			# Ping Filter then times no first exchange here (hs_bad=1) and keeps
+			# no handshake figure; elsewhere it takes none under 2 ms.
+			x=$(awk '/^\[/ { n++; if ($1 !~ /^\[[0-9]+\.[0-9][0-9][0-9][0-9][0-9][0-9]\]$/ || substr($1, length($1) - 6, 6) == "000000") b++ } END { print n + 0, b + 0 }' "$T/ctev")
+			hb=$(pfk hs_bad)
+			if [ "${x%% *}" = 0 ]; then info "conntrack's event times not checked: no event in 3 s"
+			elif [ "${x#* }" = "${x%% *}" ]; then
+				info "conntrack on this router prints no usable times ($(grep -m 1 '^\[' "$T/ctev" | cut -f1)): a fault of its 32-bit build"
+				case "$hb" in
+					1) pass "the Ping Filter times no first exchange here (hs_bad=1, 2.1.0.5)" ;;
+					0) if [ -n "$lp" ]; then fail "the Ping Filter still times first exchanges from these times (hs_bad=0)"; else info "hs_bad=0, no listener running"; fi ;;
+					*) info "hs_bad not reported (a Ping Filter older than 2.1.0.5)" ;;
+				esac
+			else
+				case "$hb" in
+					0) pass "conntrack's event times carry a fraction of a second (2.1.0.5)" ;;
+					1) info "the Ping Filter times no first exchange this boot (hs_bad=1), though conntrack's times look right now: a reboot times them again" ;;
+					*) info "hs_bad not reported (a Ping Filter older than 2.1.0.5)" ;;
+				esac
+			fi
+			x=$(awk -F'\t' '$4 == "real" { n++; if ($3 + 0 < 2) u++ } END { print n + 0, u + 0 }' "$PFR/servers.tsv" 2>/dev/null)
+			if [ "$hb" = 1 ]; then
+				if [ "${x%% *}" = 0 ] || [ -z "$x" ]; then pass "no handshake figure kept (hs_bad=1, 2.1.0.5)"
+				else fail "${x%% *} handshake figure(s) kept, from times that are no use"; fi
+			elif [ "${x#* }" = 0 ] || [ -z "$x" ]; then pass "no handshake figure under 2 ms in the list (2.1.0.5)"
+			else fail "${x#* } handshake figure(s) under 2 ms in the list"; fi
 		else
 			info "handshake timing off (hs_rtt=$(pfk hs_rtt): Lite, or no conntrack tool)"
 		fi
