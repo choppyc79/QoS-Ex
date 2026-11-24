@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.1.0.4"
+VERSION="2.1.0.5"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -952,6 +952,12 @@ pf_due_apply() {
 #     started within tele_gap s of the last counted one are the same connect
 #     (a game opens several at once).
 #   - Only the handshake: a flow re-made just after its entry died is skipped.
+#   - Under 2 ms is no round trip to a server: the listener read both of
+#     its events at once. Not a reading.
+#   - The times are conntrack's own stamps. A 32-bit build of conntrack
+#     1.4.8 prints them with no usable fraction of a second (its 64-bit
+#     time goes to a 32-bit %ld): .hs-bad, and nothing on this router is
+#     timed (_pf_hs_tick, _pf_hs_bad).
 #   - A new server under the hold: its first first_pkts packets pass, so the
 #     first exchange is timed (_pf_hold_on).
 # Output: $PF_RUN_DIR/hs-<ip> = "min_ms connects", written when either moves.
@@ -964,12 +970,23 @@ pf_hs_listen() {
 	_pf_exec_as qos-ex-pf-handshake conntrack -E -p udp -e NEW,UPDATES,DESTROY -o timestamp 2>/dev/null | \
 	awk -v qos_ex_pf=handshake -v gips="$GAMING_IP4" -v pmin="${PF_UDP_PORT_MIN:-1024}" -v dir="$PF_RUN_DIR" -v ign="$PF_IGNORE_AWK" \
 	    -v gap="${PF_TELE_GAP:-20}" '
-		BEGIN { n = split(gips, A, " "); for (i = 1; i <= n; i++) G[A[i]] = 1; hbf = dir "/.hs-seen"
+		BEGIN { n = split(gips, A, " "); for (i = 1; i <= n; i++) G[A[i]] = 1; hbf = dir "/.hs-seen"; bf = dir "/.hs-bad"
 			ni = split(ign, R, " "); for (i = 1; i <= ni; i++) { split(R[i], q, "-"); IL[i] = q[1] + 0; IH[i] = q[2] + 0 } }
 		function ignored(p,    i) { for (i = 1; i <= ni; i++) if (p >= IL[i] && p <= IH[i]) return 1; return 0 }
 		function beat() { if (s != hb) { print s > hbf; close(hbf); hb = s } }
 		$2 != "[NEW]" && $2 != "[UPDATE]" && $2 != "[DESTROY]" { next }
 		{
+			# The stamp: "[seconds.microseconds]", six digits after the point.
+			# A 32-bit conntrack 1.4.8 prints its 64-bit time with a 32-bit %ld:
+			# not six digits (ARM, MIPS little-endian), or .000000 on every event
+			# (i386, MIPS big-endian). No time it prints can be used: .hs-bad,
+			# and stop (_pf_hs_tick starts no listener after it). Nothing is read
+			# before a stamp with a fraction of a second has been seen.
+			if ($1 !~ /^\[[0-9]+\.[0-9][0-9][0-9][0-9][0-9][0-9]\]$/) bad = 1
+			else if (substr($1, length($1) - 6, 6) != "000000") ok = 1
+			else if (!ok && ++zr >= 20) bad = 1
+			if (bad) { print $1 > bf; close(bf); exit }
+			if (!ok) next
 			src = ""; dst = ""; sp = ""; dp = ""
 			for (i = 3; i <= NF && dp == ""; i++) {
 				if      (src == "" && substr($i, 1, 4) == "src=")   src = substr($i, 5)
@@ -1013,7 +1030,8 @@ pf_hs_listen() {
 			ms = int((s - S[k]) * 1000 + (u - U[k]) / 1000 + 0.5)
 			delete S[k]; delete U[k]; np--
 			if (ms > 2000) next
-			if (ms < 1) ms = 1
+			# Under 2 ms is no round trip to a server: both events read at once.
+			if (ms < 2) next
 			if (!(dst in N) && ++nd > 2048) { split("", N); split("", M); split("", T); nd = 1 }
 			c = 0
 			if (!(dst in N) || st - T[dst] >= gap + 0) { N[dst]++; T[dst] = st; c = 1; if (N[dst] == 1) M[dst] = ms }
@@ -1027,6 +1045,7 @@ pf_hs_listen() {
 
 # One listener, restarted when it died, or when the devices or the ignored
 # ports changed (PF_HS_SRC: what it was started with; it keeps both).
+# None once the stamps it read showed no usable times (.hs-bad).
 # PF_HS_PID / PF_HS_SRC / PF_HS_T and PF_HS_DUE / PF_HS_DUE0 (_pf_hs_due)
 # are daemon globals.
 _pf_hs_stop() {
@@ -1036,9 +1055,10 @@ _pf_hs_stop() {
 	PF_HS_PID=""
 }
 _pf_hs_tick() {
-	if [ "${PF_HS_RTT:-0}" != "1" ] || [ -z "$GAMING_IP4" ]; then
+	if [ "${PF_HS_RTT:-0}" != "1" ] || [ -z "$GAMING_IP4" ] || [ -f "$PF_RUN_DIR/.hs-bad" ]; then
 		_pf_hs_stop
 		_pf_hs_quiet_off
+		[ -f "$PF_RUN_DIR/.hs-bad" ] && _pf_hs_bad
 		return 0
 	fi
 	local _k="$GAMING_IP4|$PF_IGNORE_AWK"
@@ -1109,6 +1129,51 @@ _pf_hs_quiet_off() {
 	rm -f "$PF_RUN_DIR/.hs-quiet" 2>/dev/null
 	_pf_warn_clear hsquiet
 }
+# This router's conntrack prints no usable times (pf_hs_listen kept the
+# stamp in .hs-bad): no handshake is timed here until the next boot, and
+# every handshake figure the list holds came from those stamps. Once per
+# daemon: logged, those figures and the estimates made from them dropped
+# (_pf_unreal), the rows graded again on the router's own ping. .hs-bad is
+# in tmpfs: a reboot (after an update that prints them right) tries again.
+_pf_hs_bad() {
+	[ -n "$PF_HS_BAD" ] && return 0
+	PF_HS_BAD=1
+	local st=""
+	read -r st < "$PF_RUN_DIR/.hs-bad" 2>/dev/null
+	rm -f "$PF_RUN_DIR"/hs-* 2>/dev/null
+	_pf_warn_once hsbad "ping filter: this router's conntrack prints its times with no usable fraction of a second (${st:-?}: a fault of 32-bit builds), so the game's first exchange is not timed here: servers are graded on their ping from the router and estimates"
+	_pf_unreal all && pf_reclassify
+	return 0
+}
+# Figures that cannot be right go back to an estimate (the re-grade after
+# makes it): a handshake figure under 2 ms (both events read at once) and
+# an estimate under 2 ms (made from one); with "all" (.hs-bad), every
+# handshake figure and every estimate. ICMP figures stay. 0 = rows changed
+# (logged), 1 = none. Not while holding pf_tsv_lock.
+_pf_unreal() {
+	[ -s "$PF_SERVERS_TSV" ] || return 1
+	local mx=2 tmp="$PF_SERVERS_TSV.ur.$$" n r e
+	[ "$1" = all ] && mx=1000000000
+	pf_tsv_lock || return 1
+	n=$(awk -F'\t' -v OFS='\t' -v mx="$mx" -v o="$tmp" '
+		$4 != "icmp" && $3 + 0 > 0 && $3 + 0 < mx + 0 { if ($4 == "real") r++; else e++; $3 = 0; $4 = "pending"; $12 = 0 }
+		{ print > o }
+		END { close(o); printf "%d %d\n", r, e }' "$PF_SERVERS_TSV" 2>/dev/null)
+	r=${n%% *}; e=${n#* }
+	if [ "${r:-0}${e:-0}" = 00 ]; then
+		rm -f "$tmp" 2>/dev/null
+		pf_tsv_unlock
+		return 1
+	fi
+	pf_tsv_replace "$tmp" "$PF_SERVERS_TSV" 50
+	pf_tsv_unlock
+	if [ "$1" = all ]; then
+		pf_note "INFO" "ping filter: no usable times on this router - $r handshake figure(s) and $e estimate(s) dropped, graded again"
+	else
+		pf_note "INFO" "ping filter: $r handshake figure(s) and $e estimate(s) under 2 ms dropped, graded again"
+	fi
+	return 0
+}
 
 # --- server owner -------------------------------------------------------------
 # A location lookup's network owner ($2): a game company's own network
@@ -1145,6 +1210,7 @@ _pf_owner_put() {
 # verdict or the second connect is logged.
 _pf_hs_ingest() {
 	[ "${PF_HS_RTT:-0}" = "1" ] || return 0
+	[ -f "$PF_RUN_DIR/.hs-bad" ] && return 0
 	local f ip ms n ex _w _op _os _on
 	for f in "$PF_RUN_DIR"/hs-*; do
 		[ -f "$f" ] || continue
@@ -1297,7 +1363,8 @@ _pf_estimate() {
 
 # "ms area" | "ms prefix" | "ms distance" | "-1 pending", in this order:
 #  area     -- area_min or more MEASURED servers within area_km (rows with
-#              a location, ICMP and handshake alike): their MEDIAN ping,
+#              a location, ICMP and handshake alike, at 2 ms or more as the
+#              same /24 and the /24 memory take them): their MEDIAN ping,
 #              lowered area_adjust_pct percent;
 #  prefix   -- $4: the server's /24 memory (_pf_estimate), when set;
 #  area     -- the nearest /24 in the memory within area_km;
@@ -1322,7 +1389,7 @@ _pf_geo_est() {
 		BEGIN { d = (km != "") ? km + 0 : hav(hla, hlo, la, lo); if (km != "") ak = 0
 			sw = 0.25; sr = 0.25; best = -1; an = 0 }
 		FILENAME == sf {
-			if (ak + 0 > 0 && $3 + 0 > 0 && ($4 == "icmp" || $4 == "real") && ($5 + 0 != 0 || $6 + 0 != 0) \
+			if (ak + 0 > 0 && $3 + 0 >= 2 && ($4 == "icmp" || $4 == "real") && ($5 + 0 != 0 || $6 + 0 != 0) \
 			    && hav(la, lo, $5, $6) <= ak + 0) A[++an] = $3 + 0
 			next
 		}
@@ -5227,7 +5294,7 @@ pf_daemon_loop() {
 	sysctl -w net.netfilter.nf_conntrack_acct=1 >/dev/null 2>&1
 	local _cfg="/etc/config/$UCI_CFG" _cs="$PF_RUN_DIR/.cfg.stamp"
 	local _last_cfg=0 _last_up=0 _tb="" _t _view=0 now state _slept
-	PF_HS_PID=""; PF_HS_SRC=""
+	PF_HS_PID=""; PF_HS_SRC=""; PF_HS_BAD=""
 	while :; do
 		now=$(date +%s)
 		# Config: re-read when the file changed, and on a timer (a change in
@@ -5617,6 +5684,8 @@ pf_start() {
 	# Re-grade the restored cache against CURRENT settings into the kernel
 	# sets in one transaction.
 	pf_seed_gaming_set
+	# Figures that cannot be right go first (_pf_unreal).
+	_pf_unreal "$([ -f "$PF_RUN_DIR/.hs-bad" ] && echo all)"
 	pf_reclassify
 	pf_start_daemon || return 1
 	# Can the router reach the location services? In the background: a
@@ -5679,6 +5748,7 @@ pf_reload() {
 	# over it.
 	pf_persist_restore
 	pf_cache_sanitise
+	_pf_unreal "$([ -f "$PF_RUN_DIR/.hs-bad" ] && echo all)"
 	pf_reclassify
 	# Settings are applied above; the daemon picks the config up itself. Wake
 	# it if parked.
@@ -6262,6 +6332,7 @@ pf_status() {
 	echo "ping_var_pct=${PF_PING_VAR_PCT:-5}"
 	echo "hs_rtt=${PF_HS_RTT:-0}"
 	echo "hs_quiet=$([ -f "$PF_RUN_DIR/.hs-quiet" ] && echo 1 || echo 0)"
+	echo "hs_bad=$([ -f "$PF_RUN_DIR/.hs-bad" ] && echo 1 || echo 0)"
 	echo "probe_retries=${PF_PROBE_RETRIES:-0}"
 	echo "auto_pin=${PF_AUTO_PIN:-0}"
 	local _a24=""
@@ -6329,6 +6400,7 @@ pf_status() {
 	echo "  Geo lookup:     $PF_GEOIP_LOOKUP"
 	_pf_offload_on && echo "  [!!] Flow offloading is ON: established game flows bypass the Ping Filter"
 	[ -f "$PF_RUN_DIR/.hs-quiet" ] && echo "  [!!] Handshake timing hears no conntrack events: servers that ignore ping stay on estimates (see the log)"
+	[ -f "$PF_RUN_DIR/.hs-bad" ] && echo "  [!!] Handshake timing off: conntrack on this router prints no usable times (a 32-bit build): servers are graded on their ping from the router and estimates"
 	echo "  Gaming IPv4:    ${GAMING_IP4:-(none)}"
 	echo "  Prereqs:"
 	if [ -n "$GAMING_IP4$GAMING_IP6$PF_MAC_SEL" ]; then
@@ -6367,11 +6439,12 @@ pf_servers_json() {
 	else ps=0; fi
 
 	# Stuck-matchmaking note from the daemon.
-	local stuck=0 geod=0 hsq=0
+	local stuck=0 geod=0 hsq=0 hsb=0
 	[ -f "$PF_RUN_DIR/.stuck" ] && read -r stuck _ < "$PF_RUN_DIR/.stuck" 2>/dev/null
 	case "$stuck" in (''|*[!0-9]*) stuck=0 ;; esac
 	_pf_geo_is_down && geod=1
 	[ -f "$PF_RUN_DIR/.hs-quiet" ] && hsq=1
+	[ -f "$PF_RUN_DIR/.hs-bad" ] && hsb=1
 
 	local hlat_q hlon_q
 	case "$PF_HOME_LAT" in (''|*[!0-9.-]*) hlat_q="null" ;; (*) hlat_q="$PF_HOME_LAT" ;; esac
@@ -6423,10 +6496,10 @@ pf_servers_json() {
 	} > "$canon_tmp"
 
 	if [ ! -s "$canon_tmp" ]; then
-		printf '{"servers":[],"ts":%s,"threshold":%s,"enabled":%s,"master_enabled":%s,"activity":"%s","home_lat":%s,"home_lon":%s,"home_radius_km":%s,"block_mode":"%s","active_pps":%s,"ping_catch":%s,"ping_var_pct":%s,"whitelist_ips":"%s","blacklist_ips":"%s","play_start":%s,"map_keep":%s,"stuck":%s,"countries":"%s","geo_down":%s,"hs_quiet":%s}\n' \
+		printf '{"servers":[],"ts":%s,"threshold":%s,"enabled":%s,"master_enabled":%s,"activity":"%s","home_lat":%s,"home_lon":%s,"home_radius_km":%s,"block_mode":"%s","active_pps":%s,"ping_catch":%s,"ping_var_pct":%s,"whitelist_ips":"%s","blacklist_ips":"%s","play_start":%s,"map_keep":%s,"stuck":%s,"countries":"%s","geo_down":%s,"hs_quiet":%s,"hs_bad":%s}\n' \
 			"$now" "${PF_THRESHOLD_MS:-50}" "${PF_ENABLED:-0}" "${ENABLED:-0}" "$activity" \
 			"$hlat_q" "$hlon_q" "$hr_q" "$bm_q" "${PF_ACTIVE_PPS:-20}" "${PF_PING_CATCH:-0}" "${PF_PING_VAR_PCT:-5}" "$wl" "$bl" "$ps" "${PF_MAP_KEEP:-3600}" \
-			"$stuck" "$(printf '%s' "$PF_COUNTRIES" | sed 's/[\\"]//g')" "$geod" "$hsq"
+			"$stuck" "$(printf '%s' "$PF_COUNTRIES" | sed 's/[\\"]//g')" "$geod" "$hsq" "$hsb"
 		rm -f "$canon_tmp" 2>/dev/null
 		return
 	fi
@@ -6436,7 +6509,7 @@ pf_servers_json() {
 
 	PF_J_CO="$PF_COUNTRIES" \
 	awk -F'\t' -v now="$now" -v thr="${PF_THRESHOLD_MS:-50}" \
-	    -v stuck="$stuck" -v geod="$geod" -v hsq="$hsq" \
+	    -v stuck="$stuck" -v geod="$geod" -v hsq="$hsq" -v hsb="$hsb" \
 	    -v en="${PF_ENABLED:-0}" -v men="${ENABLED:-0}" -v act="$activity" \
 	    -v wl="$wl" -v bl="$bl" \
 	    -v ttl_disp="${PF_SET_TIMEOUT:-43200}" \
@@ -6635,8 +6708,8 @@ pf_servers_json() {
 			h_sess, h_jit, h_jmax, h_loss, h_pps, h_dur, h_gaps, bkm, gsus, jesc(GN[ip])
 	}
 	END {
-		printf "],\"ts\":%s,\"threshold\":%s,\"enabled\":%s,\"master_enabled\":%s,\"activity\":\"%s\",\"home_lat\":%s,\"home_lon\":%s,\"home_radius_km\":%s,\"block_mode\":\"%s\",\"active_pps\":%s,\"ping_catch\":%s,\"ping_var_pct\":%s,\"whitelist_ips\":\"%s\",\"blacklist_ips\":\"%s\",\"play_start\":%s,\"map_keep\":%s,\"stuck\":%d,\"countries\":\"%s\",\"geo_down\":%d,\"hs_quiet\":%d}\n", \
-			now, thr, en, men, act, hlat, hlon, hr, jesc(bm), apps_cfg, pcatch + 0, pvar + 0, jesc(wl), jesc(bl), pstart + 0, mkeep + 0, stuck + 0, jesc(ENVIRON["PF_J_CO"]), geod + 0, hsq + 0
+		printf "],\"ts\":%s,\"threshold\":%s,\"enabled\":%s,\"master_enabled\":%s,\"activity\":\"%s\",\"home_lat\":%s,\"home_lon\":%s,\"home_radius_km\":%s,\"block_mode\":\"%s\",\"active_pps\":%s,\"ping_catch\":%s,\"ping_var_pct\":%s,\"whitelist_ips\":\"%s\",\"blacklist_ips\":\"%s\",\"play_start\":%s,\"map_keep\":%s,\"stuck\":%d,\"countries\":\"%s\",\"geo_down\":%d,\"hs_quiet\":%d,\"hs_bad\":%d}\n", \
+			now, thr, en, men, act, hlat, hlon, hr, jesc(bm), apps_cfg, pcatch + 0, pvar + 0, jesc(wl), jesc(bl), pstart + 0, mkeep + 0, stuck + 0, jesc(ENVIRON["PF_J_CO"]), geod + 0, hsq + 0, hsb + 0
 	}
 	' "$canon_tmp" 2>/dev/null
 
