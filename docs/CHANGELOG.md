@@ -5,7 +5,16 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.2 · Ping Filter 2.1.0.4 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.3 · Ping Filter 2.1.0.5 · shaper 3.2.2.8**
+
+## LuCI app 1.4.1.3
+
+- Changed: the Ping Filter **Dashboard** says when the conntrack tool on the router prints no usable times (a fault of 32-bit builds): servers are then graded on their ping from the router, and one that ignores ping keeps its estimate (~).
+
+## Ping Filter 2.1.0.5
+
+- Fixed: on a router with a 32-bit CPU, every server timed from the game's first exchange read 1 ms. The router's conntrack tool (1.4.8, in OpenWrt 24.10 and 25.12) prints the time of each event with no usable fraction of a second on 32-bit builds, so every first exchange measured 0. Those readings let in servers they should not have (with **Ping Catch**, any server outside the radius) and went into the estimates of the servers near them. The Ping Filter now checks those times: when they are unusable it times no first exchange on that router, says so in its log and on the **Dashboard**, drops the figures it took from them, and grades those servers again on their ping from the router and on estimates. 64-bit routers time the first exchange as before.
+- Changed: a first exchange that reads under 2 ms is no longer used (it is not a round trip: both of its events were read at once), and an estimate from nearby servers leaves out readings under 2 ms, as the other estimates already did. Handshake figures and estimates under 2 ms from before are dropped when the Ping Filter starts.
 
 ## LuCI app 1.4.1.2
 
