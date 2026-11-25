@@ -5,7 +5,11 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.3 · Ping Filter 2.1.0.5 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.3 · Ping Filter 2.1.0.6 · shaper 3.2.2.8**
+
+## Ping Filter 2.1.0.6
+
+- Fixed: on a router whose tcpdump cannot decode the packets on its internet line (seen with a PPPoE line), the stutter and jitter of the servers you play were wrong, and the grades with them. tcpdump then prints each packet's time followed by its raw bytes, and the Ping Filter read those lines as times too, so every packet counted as about 19 gaps (thousands a minute). It now reads only each packet's time. Grades and played matches with more gaps than can fit (over 500 a minute) are dropped when the Ping Filter starts; the servers are graded again from your next matches.
 
 ## LuCI app 1.4.1.3
 
