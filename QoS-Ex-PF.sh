@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.1.0.5"
+VERSION="2.1.0.6"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -1172,6 +1172,36 @@ _pf_unreal() {
 	else
 		pf_note "INFO" "ping filter: $r handshake figure(s) and $e estimate(s) under 2 ms dropped, graded again"
 	fi
+	return 0
+}
+# Grades whose gaps cannot be real go: a gap is a silence over 120 ms, so no
+# more than 500 fit in a minute. Before 2.1.0.6 a tcpdump that printed a hex
+# dump under each stamp counted about 19 a packet. Play history lines and
+# graded history rows over that are dropped (logged); the server is graded
+# again by its next match. Not while holding pf_tsv_lock.
+_pf_stutter_void() {
+	local f n s="" _lk
+	_pf_side_lock
+	for f in "$PF_TELE_HIST:3:7" "$PF_SESS_TSV:3:6"; do
+		set -- "${f%%:*}" "${f#*:}"
+		[ -s "$1" ] || continue
+		n=$(awk -F'\t' -v d="${2%:*}" -v g="${2#*:}" -v o="$1.sv.$$" '
+			$d + 0 > 0 && $g * 120 > $d * 1000 { n++; next }
+			{ print > o }
+			END { close(o); print n + 0 }' "$1" 2>/dev/null)
+		if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+			if [ -f "$1.sv.$$" ]; then mv "$1.sv.$$" "$1"; else : > "$1"; fi
+			s="$s $n"
+		else
+			rm -f "$1.sv.$$" 2>/dev/null
+			s="$s 0"
+		fi
+	done
+	_pf_side_unlock
+	# shellcheck disable=SC2086
+	set -- $s
+	[ "${1:-0}${2:-0}" = 00 ] && return 0
+	pf_note "INFO" "ping filter: ${1:-0} graded server(s) and ${2:-0} played match(es) with more gaps than can fit (over 500 a minute) dropped, graded again by the next match"
 	return 0
 }
 
@@ -3164,6 +3194,9 @@ PF_JIT_AWK='
 		split("", D); split("", S)
 	}
 	{
+		# Only a packet line counts: a tcpdump that cannot decode the link
+		# prints its bytes below the stamp, and "0x0010:" would read as 16 s.
+		if ($1 !~ /^[0-9]+\.[0-9]+$/) next
 		t = $1 + 0
 		if (t <= 0) next
 		if (win + 0 > 0) {
@@ -5686,6 +5719,7 @@ pf_start() {
 	pf_seed_gaming_set
 	# Figures that cannot be right go first (_pf_unreal).
 	_pf_unreal "$([ -f "$PF_RUN_DIR/.hs-bad" ] && echo all)"
+	_pf_stutter_void
 	pf_reclassify
 	pf_start_daemon || return 1
 	# Can the router reach the location services? In the background: a
@@ -5749,6 +5783,7 @@ pf_reload() {
 	pf_persist_restore
 	pf_cache_sanitise
 	_pf_unreal "$([ -f "$PF_RUN_DIR/.hs-bad" ] && echo all)"
+	_pf_stutter_void
 	pf_reclassify
 	# Settings are applied above; the daemon picks the config up itself. Wake
 	# it if parked.
