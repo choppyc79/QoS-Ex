@@ -187,10 +187,21 @@ return view.extend({
 					}));
 				}) }, label);
 		}
-		view.cq = { sub: E('div', { 'class': 'qx-ctl-sub' }), stat: E('div', { 'class': 'qx-ctl-stat' }),
+		// The Ping Filter only: Shape the line opens Auto Setup again (shown
+		// only then, from paint).
+		var shape = E('button', { 'type': 'button', 'class': 'btn cbi-button qx-mini', 'hidden': '',
+			'click': ui.createHandlerFn(view, function() {
+				return h.callAutosetupRun('again', '').then(function(r) {
+					if (!(r && r.ok)) throw new Error((r && r.error) || '?');
+					h.menuGo([ 'autosetup' ]);
+				}).catch(function(e) {
+					h.notifyErr(_('Run Auto Setup') + ': ' + _('failed') + ' (' + ((e && e.message) || e) + ')');
+				});
+			}) }, _('Shape the line…'));
+		view.cq = { sub: E('div', { 'class': 'qx-ctl-sub' }), stat: E('div', { 'class': 'qx-ctl-stat' }), shape: shape,
 			btns: E('div', { 'class': 'qx-ctl-btns' }, [
 				small(_('Restart'), 'restart', _('Shaper restarted')),
-				small(_('Reload rules'), 'reload', _('nft rules reloaded')) ]) };
+				small(_('Reload rules'), 'reload', _('nft rules reloaded')), shape ]) };
 		view.cp = { sub: E('div', { 'class': 'qx-ctl-sub' }), stat: E('div', { 'class': 'qx-ctl-stat' }) };
 		var ctl = E('div', { 'class': 'cbi-section qos-ex-card qx-ctl' }, [
 			E('div', { 'class': 'qx-ctl-row' }, [
@@ -474,9 +485,11 @@ return view.extend({
 		var st = h.parseState(view.stOut).state, fu = view.full || {};
 		var enabled = (st.enabled || uci.get('qos-ex', 'settings', 'enabled') || '0') === '1';
 		var running = h.running(st);
+		// The Ping Filter only (both rates 0): QoS-Ex runs, nothing is shaped.
+		var pfo = st.pf_only === '1';
 		var j = view.pf || {};
 		var pfOn = j.enabled === 1 || j.enabled === '1';
-		var act = (pfOn && running) ? (j.activity || 'idle') : 'off';
+		var act = (pfOn && (running || pfo)) ? (j.activity || 'idle') : 'off';
 		var cnt = h.pfCounts(j);
 
 		// ---- Installed copy out of date (every control is affected). -----
@@ -604,22 +617,24 @@ return view.extend({
 		var qd = String(h.qdiscDisplay(h.qdiscCfg())).toUpperCase(), nm = h.nftModeDisplay(uci.get('qos-ex', 'settings', 'nft_mode') || st.nft_mode || 'adaptive');
 		var dlEff = st.dl_kbps_eff || '', ulEff = st.ul_kbps_eff || '', sr = h.shapedRates();
 		function rate(eff, cfg) { return eff === '0' ? _('unshaped') : h.fmtMbps(eff || cfg) + ''; }
-		h.setText(view.cq.sub, qd + ' · ' + nm);
-		view.cq.stat.className = 'qx-ctl-stat ' + (running ? 'on' : enabled ? 'warn' : 'off');
+		h.setText(view.cq.sub, pfo ? _('Ping Filter only · both rates 0') : qd + ' · ' + nm);
+		view.cq.stat.className = 'qx-ctl-stat ' + (running || pfo ? 'on' : enabled ? 'warn' : 'off');
 		h.setText(view.cq.stat, running ? '● ' + _('Running') + (st.uptime_s ? ' · ' + h.fmtUptime(st.uptime_s) : '') +
 				' · ↓ ' + rate(dlEff, sr.dn) + ' ↑ ' + rate(ulEff, sr.up) + ' Mbps'
+			: pfo ? '● ' + _('Running') + (st.uptime_s ? ' · ' + h.fmtUptime(st.uptime_s) : '') + ' · ' + _('nothing shaped')
 			: enabled ? '● ' + _('On, but not running — Restart') : '○ ' + _('Off'));
 		view.cq.btns.hidden = !enabled;
+		view.cq.shape.hidden = !pfo;
 		view.swQ.qxSet(enabled, false);
 
 		var devs = h.pfDevIps();
 		var ready = devs.length > 0 && haveHome;
 		h.setText(view.cp.sub, pfProfile(j));
-		view.cp.stat.className = 'qx-ctl-stat ' + (!pfOn ? 'off' : !running ? 'warn' : act === 'active' ? 'play' : 'on');
+		view.cp.stat.className = 'qx-ctl-stat ' + (!pfOn ? 'off' : !(running || pfo) ? 'warn' : act === 'active' ? 'play' : 'on');
 		h.setText(view.cp.stat, !pfOn ? (ready ? '○ ' + _('Off')
 				: '○ ' + _('Off — needs %s first').format(!devs.length && !haveHome ? _('a gaming device and your home')
 					: !devs.length ? _('a gaming device') : _('your home')))
-			: !running ? '● ' + _('Armed — runs when the shaper is on')
+			: !(running || pfo) ? '● ' + _('Armed — runs when the shaper is on')
 			: act === 'active' ? '⦿ ' + _('In match') : act === 'matchmaking' ? '⦾ ' + _('Matchmaking') : '● ' + _('Watching'));
 		view.swP.qxSet(pfOn, !ready, ready ? '' : _('Set a gaming device and your home first: Ping Filter → Dashboard'));
 
@@ -628,13 +643,13 @@ return view.extend({
 		[ [ 'down', 'dn', 'dl_kbps', dlEff ], [ 'up', 'up', 'ul_kbps', ulEff ] ].forEach(function(p) {
 			var S = LT.S[p[0]], s = S[S.length - 1], sh = (+LT.meta[p[2]] || 0) * 1000;
 			h.setText(tv[p[1]], s ? h.fmtRate(s.r) : '—');
-			h.setText(tv[p[1] + 's'], !running ? _('shaper off') : p[3] === '0' ? _('not shaped')
+			h.setText(tv[p[1] + 's'], pfo ? _('not shaped') : !running ? _('shaper off') : p[3] === '0' ? _('not shaped')
 				: sh ? _('of %s Mbps').format(h.fmtMbps(sh / 1000)) : '');
 			view.gq[p[1]].set(s && sh ? s.r / sh : 0);
 		});
 		var G = LT.G, gl = G[G.length - 1];
 		h.setText(tv.gm, gl ? h.fmtRate(gl.dn + gl.up) : '—');
-		h.setText(tv.gms, !running ? _('shaper off') : !gl ? _('measuring…')
+		h.setText(tv.gms, pfo ? _('not shaped') : !running ? _('shaper off') : !gl ? _('measuring…')
 			: '↓ ' + h.fmtRate(gl.dn) + ' · ↑ ' + h.fmtRate(gl.up) + ' · EF');
 		var gsig = G.length + ':' + (gl ? gl.t : 0);
 		if (tv.gmm.__sig !== gsig) { tv.gmm.__sig = gsig; dom.content(tv.gmm, rateSpark(G)); }
@@ -649,14 +664,15 @@ return view.extend({
 		var pfm = {};
 		(j.servers || []).forEach(function(s) { if (s && s.ip) pfm[s.ip] = s; });
 		var C = view.ct, frows = (C.rows || []).slice(0, FLOW_MAX);
-		fill(b.flows, JSON.stringify([ running, C.n | 0, frows.map(function(r) {
+		fill(b.flows, JSON.stringify([ running, pfo, C.n | 0, frows.map(function(r) {
 			var s = pfm[r.dst] || pfm[r.src];
 			return [ r.key, r.upPps, r.dnPps, r.upBps, r.dnBps, s ? s.state + s.ping : '' ];
 		}), Object.keys(gset).length ]), function() {
 			var title = E('h3', { 'class': 'qos-ex-card-title' }, [ _('Gaming flow'),
 				E('span', { 'class': 'qos-ex-tools' }, h.go([ 'live', 'flows' ], _('Flows'))) ]);
 			if (!frows.length) return [ title, E('div', { 'class': 'qx-sub qx-gflow-empty' },
-				!running ? _('Shaper off — the game stream shows here while it runs.')
+				pfo ? _('Ping Filter only: nothing is shaped or marked, so no game stream here. Flows lists the connections.')
+				: !running ? _('Shaper off — the game stream shows here while it runs.')
 				: (C.n | 0) < 2 ? _('Measuring…')
 				: _('No game traffic right now; it shows once a gaming device plays.')) ];
 			// data-title: the theme's phone layout labels each stacked cell.
@@ -689,11 +705,12 @@ return view.extend({
 		});
 
 		// ---- Gaming queue: the gaming class as the shaper runs it. -------
-		var qsig = [ running, dlEff, ulEff, LT.tc ? JSON.stringify([ LT.tc.ingress, LT.tc.egress ]).length + ':' + (LT.prev ? LT.prev.t : 0) : '' ];
+		var qsig = [ running, pfo, dlEff, ulEff, LT.tc ? JSON.stringify([ LT.tc.ingress, LT.tc.egress ]).length + ':' + (LT.prev ? LT.prev.t : 0) : '' ];
 		fill(b.queue, JSON.stringify(qsig), function() {
+			// The Ping Filter only: both rates read 0, so each panel says not shaped.
 			return [ E('h3', { 'class': 'qos-ex-card-title' }, [ _('Gaming queue'),
 					E('span', { 'class': 'qos-ex-tools' }, h.go([ 'live', 'stats' ], _('Stats'))) ]),
-				E('div', { 'class': 'qx-q' }, [ view.queuePanel('down', running, dlEff), view.queuePanel('up', running, ulEff) ]) ];
+				E('div', { 'class': 'qx-q' }, [ view.queuePanel('down', running || pfo, dlEff), view.queuePanel('up', running || pfo, ulEff) ]) ];
 		});
 
 		// ---- At a glance: one line per area, linking to where it is set. -
