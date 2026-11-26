@@ -66,7 +66,7 @@ function card(title, rows, extra) {
 var LITE = [ 'version', 'enabled', 'qdisc', 'nft_mode', 'wan', 'ifb',
 	'ul_kbps_eff', 'dl_kbps_eff', 'backend_stale', 'pf_stale', 'ifb_up',
 	'root_qdisc', 'ingress_qdisc', 'ctinfo', 'nft_table', 'init', 'hotplug',
-	'running', 'shape_up', 'shape_dn' ];
+	'running', 'shape_up', 'shape_dn', 'pf_only' ];
 function liteSig(s) {
 	return LITE.map(function(k) { return s[k] || ''; }).join('|');
 }
@@ -156,8 +156,10 @@ return view.extend({
 		var upTile = tile(_('Uptime'), h.fmtUptime(st.uptime_s), null, 'v' + (st.version || '?'));
 		upTile.querySelector('.qos-ex-tile-v').setAttribute('id', 'qos-ex-up-v');
 
+		// The Ping Filter only (both rates 0): running, nothing shaped.
+		var pfo = st.pf_only === '1';
 		var tiles = E('div', { 'class': 'qos-ex-tiles' }, [
-			tile(_('Service'), svcUp ? _('Running') : _('Stopped'), svcUp ? 'ok' : 'bad',
+			tile(_('Service'), svcUp ? _('Running') : pfo ? _('Ping Filter only') : _('Stopped'), svcUp || pfo ? 'ok' : 'bad',
 				st.enabled === '1' ? _('enabled') : _('disabled')),
 			upTile,
 			tile(_('Shaper'), h.qdiscDisplay(qd), null,
