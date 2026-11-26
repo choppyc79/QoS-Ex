@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.1.0.6"
+VERSION="2.1.0.7"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -595,7 +595,10 @@ _pf_ports_norm() {
 	for _t in "$@"; do
 		case "$_t" in ''|*[!0-9-]*|-*|*-|*-*-*) continue ;; esac
 		_lo=${_t%-*}; _hi=${_t#*-}
-		_isnum "$_lo" && _isnum "$_hi" && [ "${#_hi}" -le 5 ] || continue
+		# Leading zeros are decimal, as the page takes them ("03478" = 3478).
+		_lo=${_lo#"${_lo%%[!0]*}"}; _lo=${_lo:-0}
+		_hi=${_hi#"${_hi%%[!0]*}"}; _hi=${_hi:-0}
+		_isnum "$_lo" && _isnum "$_hi" && [ "${#_lo}" -le 5 ] && [ "${#_hi}" -le 5 ] || continue
 		[ "$_lo" -ge 1 ] && [ "$_hi" -le 65535 ] && [ "$_lo" -le "$_hi" ] || continue
 		_ov=0
 		for _k in $_a; do
@@ -1177,18 +1180,24 @@ _pf_unreal() {
 # Grades whose gaps cannot be real go: a gap is a silence over 120 ms, so no
 # more than 500 fit in a minute. Before 2.1.0.6 a tcpdump that printed a hex
 # dump under each stamp counted about 19 a packet. Play history lines and
-# graded history rows over that are dropped (logged); the server is graded
-# again by its next match. Not while holding pf_tsv_lock.
+# graded history rows over that are dropped (logged), and so is the jitter a
+# dropped server's row kept from those matches (servers.tsv col 11: the
+# Servers list scores on it once the history row is gone); the server is
+# graded again by its next match. Saved to flash at once: a start's restore
+# refills a list left empty here from the copy the stop before it saved.
+# Not while holding pf_tsv_lock.
 _pf_stutter_void() {
-	local f n s="" _lk
+	local f n s="" x="$PF_RUN_DIR/.sv.$$" _lk
 	_pf_side_lock
-	for f in "$PF_TELE_HIST:3:7" "$PF_SESS_TSV:3:6"; do
-		set -- "${f%%:*}" "${f#*:}"
-		[ -s "$1" ] || continue
-		n=$(awk -F'\t' -v d="${2%:*}" -v g="${2#*:}" -v o="$1.sv.$$" '
-			$d + 0 > 0 && $g * 120 > $d * 1000 { n++; next }
+	# file, its seconds and gaps columns, its address column (0: none kept)
+	for f in "$PF_TELE_HIST 3 7 1" "$PF_SESS_TSV 3 6 0"; do
+		# shellcheck disable=SC2086 # fixed paths, no blanks
+		set -- $f
+		[ -s "$1" ] || { s="$s 0"; continue; }
+		n=$(awk -F'\t' -v d="$2" -v g="$3" -v k="$4" -v o="$1.sv.$$" -v x="$x" '
+			$d + 0 > 0 && $g * 120 > $d * 1000 { n++; if (k) print $k > x; next }
 			{ print > o }
-			END { close(o); print n + 0 }' "$1" 2>/dev/null)
+			END { close(o); close(x); print n + 0 }' "$1" 2>/dev/null)
 		if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
 			if [ -f "$1.sv.$$" ]; then mv "$1.sv.$$" "$1"; else : > "$1"; fi
 			s="$s $n"
@@ -1197,10 +1206,22 @@ _pf_stutter_void() {
 			s="$s 0"
 		fi
 	done
+	# The rows' jitter, only under the lock (servers.tsv is the scan's too).
+	if [ "$_lk" = 1 ] && [ -s "$x" ] && [ -s "$PF_SERVERS_TSV" ]; then
+		awk -F'\t' -v OFS='\t' -v xf="$x" '
+			BEGIN { while ((getline l < xf) > 0) X[l] = 1; close(xf) }
+			($1 in X) && $11 + 0 != 0 { $11 = 0; c++ }
+			{ print }
+			END { exit !c }' "$PF_SERVERS_TSV" > "$PF_SERVERS_TSV.sv.$$" 2>/dev/null \
+			&& pf_tsv_replace "$PF_SERVERS_TSV.sv.$$" "$PF_SERVERS_TSV" 50
+		rm -f "$PF_SERVERS_TSV.sv.$$" 2>/dev/null
+	fi
+	rm -f "$x" 2>/dev/null
 	_pf_side_unlock
 	# shellcheck disable=SC2086
 	set -- $s
 	[ "${1:-0}${2:-0}" = 00 ] && return 0
+	pf_persist_save 1
 	pf_note "INFO" "ping filter: ${1:-0} graded server(s) and ${2:-0} played match(es) with more gaps than can fit (over 500 a minute) dropped, graded again by the next match"
 	return 0
 }
@@ -2689,6 +2710,10 @@ pf_cache_sanitise() {
 	[ -f "$PF_SERVERS_TSV" ] || return 0
 	[ -s "$PF_SERVERS_TSV" ] || return 0
 	local sanitised="$PF_SERVERS_TSV.san"
+	# Read under the lock as well: a list read before it and put back after
+	# lost what another process wrote in between (the daemon procd respawns
+	# while a restart's pf_start runs: the re-grade, the stutter clean-up).
+	pf_tsv_lock || return 1
 	awk -F'\t' 'BEGIN { OFS = "\t" }
 		{
 			# 12 columns (jitter, loss last). Older 10- and 11-column
@@ -2709,9 +2734,6 @@ pf_cache_sanitise() {
 		}
 	' "$PF_SERVERS_TSV" > "$sanitised" 2>"$PF_RUN_DIR/.san.log"
 	if [ -f "$sanitised" ]; then
-		# Guarded: a failed acquire must not rewrite the TSV or remove a lock
-		# it does not own.
-		pf_tsv_lock || { rm -f "$sanitised" "$PF_RUN_DIR/.san.log" 2>/dev/null; return 1; }
 		pf_tsv_replace "$sanitised" "$PF_SERVERS_TSV" 50
 		pf_tsv_unlock
 		local n_dropped
@@ -2719,6 +2741,8 @@ pf_cache_sanitise() {
 		if [ "${n_dropped:-0}" -gt 0 ] 2>/dev/null; then
 			msg "ping filter: TSV migration — dropped $n_dropped old/corrupt row(s)"
 		fi
+	else
+		pf_tsv_unlock
 	fi
 	rm -f "$PF_RUN_DIR/.san.log" 2>/dev/null
 }
@@ -6139,6 +6163,9 @@ pf_list_clear() {
 		pf_load_config
 		pf_table_present && { pf_table_install >/dev/null 2>&1; pf_reclassify; } ;;
 	esac
+	# Saved at once, as forget: when its rows were all the list held (after
+	# Clear cache), the next restore would bring them back from flash.
+	pf_persist_save 1
 	msg "ping filter $list_name cleared ($count entries removed)"
 }
 
