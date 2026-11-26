@@ -17,6 +17,8 @@
 #     redial    ifup wan                                     the internet drops a few seconds
 #     rules     each other rule set in turn, then back       a settings change, undone (three reloads)
 #     queue     HTB for a moment, then back                  a settings change, undone; shaping off ~10 s twice
+#     pfonly    both rates 0 for a moment, then back         a settings change, undone (two reloads):
+#                                                            nothing shaped while it runs
 #     update    two Update now at once                       runs the updater: installs what changed, if anything
 #     speedtest Auto Setup's speed test and queue check      shaping and the Ping Filter off about a
 #                                                            minute; traffic to Cloudflare (or LibreSpeed)
@@ -119,12 +121,15 @@ shaper() {
 	"$Q" status > "$T/status" 2>&1
 	s=""; for k in enabled running qdisc nft_mode wan wan_live ifb download_on shape_up shape_dn ul_kbps_eff dl_kbps_eff wash_down; do s="$s $k=$(st $k)"; done
 	info "${s# }"
-	[ "$(st running)" = 1 ] && pass "running" || fail "not running (enabled=$(st enabled))"
+	if [ "$(st running)" = 1 ]; then pass "running"
+	elif [ "$(st pf_only)" = 1 ]; then pass "running the Ping Filter only: both rates 0 (shaper 3.2.2.9)"
+	else fail "not running (enabled=$(st enabled))"; fi
 	for k in root_qdisc ingress_qdisc ifb_up ctinfo nft_table init hotplug; do
 		off=0
 		[ "$k" = root_qdisc ] && [ "$(st shape_up)" = 0 ] && off=1
 		case "$k" in ingress_qdisc|ifb_up|ctinfo) [ "$(st shape_dn)" = 0 ] && off=1 ;; esac
-		if [ "$off" = 1 ]; then info "$k: that direction is not shaped"
+		[ "$k" = nft_table ] && [ "$(st pf_only)" = 1 ] && off=1
+		if [ "$off" = 1 ]; then info "$k: not shaped (that direction, or the Ping Filter only)"
 		elif [ "$(st $k)" = 1 ]; then pass "health $k"
 		else fail "health $k=$(st $k)"; fi
 	done
@@ -343,6 +348,8 @@ hook() {
 	[ -f "$HOOK" ] || { fail "$HOOK missing"; return; }
 	n=$(grep -c hp_again "$HOOK")
 	[ "$n" = 3 ] && pass "the 3.2.0.8 hook (replays an ifup that comes during a restart)" || fail "hook without the 3.2.0.8 replay (hp_again x$n)"
+	grep -q 'Ping Filter only, nothing to do' "$HOOK" && pass "the hook leaves the Ping Filter only alone on an ifup (shaper 3.2.2.9)" ||
+		fail "hook without the Ping Filter only answer (shaper 3.2.2.9)"
 	if [ -d "$LOCK" ]; then info "hotplug lock held ($(($(now) - $(cat "$LOCK/ts" 2>/dev/null || echo 0))) s old)"
 	else pass "no hotplug lock held"; fi
 	logread -e QoS-Ex-hotplug 2>/dev/null | tail -n 4 | ind
@@ -359,6 +366,47 @@ counters() {
 	b=$(cs); i=0; while [ $i -lt 10 ]; do "$Q" counters >/dev/null 2>&1; i=$((i + 1)); done
 	c=$(cs)
 	info "counters, average of 10 calls: $((b - a)) ms through rpcd (the light way), $((c - b)) ms through the whole backend"
+}
+
+# Both rates 0 (shaper 3.2.2.9): the Ping Filter only. Nothing of QoS-Ex's on
+# any device and no shaper rule set; the pages read it from state and from
+# the counters. Read-only.
+pfonly() {
+	sec "Ping Filter only (shaper 3.2.2.9)"
+	"$Q" state > "$T/state" 2>/dev/null
+	[ "$(kv "$T/state" pf_only)" = 1 ] && pass "state: pf_only=1 (running=$(kv "$T/state" running))" ||
+		fail "state: pf_only=$(kv "$T/state" pf_only) under a Ping Filter only stamp"
+	if grep -qE '^(WAN|IFB)=' "$STAMP"; then fail "the start stamp names a device: $(grep -E '^(WAN|IFB)=' "$STAMP" | tr '\n' ' ')"
+	else pass "the start stamp names no device (another shaper's queue stays its own)"; fi
+	n=$(shaper_tables)
+	[ "$n" = 0 ] && pass "no shaper rule set loaded" || fail "$n shaper table(s) loaded"
+	n=$(ls /var/run/qos-ex/qos_ex_*.nft 2>/dev/null | wc -l)
+	[ "$n" = 0 ] && pass "no rule-set file in /var/run/qos-ex" || fail "$n rule-set file(s) in /var/run/qos-ex"
+	o=""
+	for d in $(ifbs); do
+		a=""; [ -r "/sys/class/net/$d/ifalias" ] && read -r a < "/sys/class/net/$d/ifalias"
+		[ "$a" = qos-ex ] && o="$o $d"
+	done
+	[ -z "$o" ] && pass "no IFB of QoS-Ex's" || fail "a QoS-Ex IFB is left:$o"
+	w=$(uci -q get qos-ex.settings.wan); k=$(rootkind "$w")
+	case "$k" in
+		cake|cake_mq|hfsc|htb) info "$w root $k: another shaper's (QoS-Ex built none)" ;;
+		*) pass "no shaping queue on $w (root ${k:-none})" ;;
+	esac
+	r=$(ubus call qos-ex counters 2>/dev/null); o=$(jsonfilter -s "$r" -e '@.output' 2>/dev/null)
+	case "$o" in
+		*pf_only=1*) pass "the counters reply says the Ping Filter only (Status tile, Stats)" ;;
+		*) fail "no pf_only=1 in the counters reply" ;;
+	esac
+	if [ "$(uci -q get qos-ex.pingfilter.enabled)" = 1 ]; then
+		p=$(cat "$PFR/daemon.pid" 2>/dev/null)
+		[ -n "$p" ] && kill -0 "$p" 2>/dev/null && pass "the Ping Filter daemon runs (pid $p)" || fail "the Ping Filter is on, but no daemon runs"
+		[ -e "$PFR/.stopped" ] && fail "the Ping Filter is parked (.stopped): the 3.2.2.8 fault" || pass "the Ping Filter is not parked"
+		nft list tables 2>/dev/null | grep -q 'qos_ex_pf$' && pass "Ping Filter table qos_ex_pf loaded" || fail "no Ping Filter table"
+	else
+		info "the Ping Filter is off: set it up on Ping Filter -> Dashboard"
+	fi
+	logread -e QoS-Ex 2>/dev/null | grep 'Ping Filter only' | tail -n 3 | ind
 }
 
 # LuCI app 1.4.0.1: the lighter page calls. Read-only (a peek asks the Ping
@@ -769,6 +817,50 @@ test_queue() {
 	[ "$(st qdisc)" = "$q0" ] && pass "queue type back to $q0" || fail "queue type $(st qdisc), want $q0"
 }
 
+# test pfonly: the rates as they were. Also from the exit trap, so a run
+# stopped part-way does not leave both rates at 0.
+rates_back() {
+	[ -f "$T/rates" ] || return 0
+	read -r _d _u < "$T/rates"
+	rm -f "$T/rates"
+	if [ "$_d" = - ]; then uci -q delete qos-ex.settings.download_kbps; else uci set qos-ex.settings.download_kbps="$_d"; fi
+	if [ "$_u" = - ]; then uci -q delete qos-ex.settings.upload_kbps; else uci set qos-ex.settings.upload_kbps="$_u"; fi
+	uci commit qos-ex
+	svc reload >/dev/null 2>&1
+}
+
+# Both rates 0 for a moment (the Ping Filter only), then back: two reloads,
+# nothing shaped in between; the Ping Filter stays up through both.
+test_pfonly() {
+	sec "TEST pfonly: both rates 0 for a moment, then back"
+	[ "$(sv MODE)" = pf ] && { info "already the Ping Filter only: the section above covers it"; return; }
+	running || { skip "the shaper is not running"; return; }
+	d0=$(uci -q get qos-ex.settings.download_kbps) u0=$(uci -q get qos-ex.settings.upload_kbps)
+	echo "${d0:--} ${u0:--}" > "$T/rates"
+	p0=$(cat "$PFR/daemon.pid" 2>/dev/null)
+	uci set qos-ex.settings.download_kbps=0; uci set qos-ex.settings.upload_kbps=0; uci commit qos-ex
+	t0=$(now); svc reload >/dev/null 2>&1
+	i=0; while [ "$i" -lt 20 ] && [ "$(sv MODE)" != pf ]; do sleep 1; i=$((i + 1)); done
+	[ "$(sv MODE)" = pf ] && pass "the Ping Filter only $(($(now) - t0)) s after the reload" || fail "no Ping Filter only stamp 20 s after the reload"
+	pfonly
+	p=$(cat "$PFR/daemon.pid" 2>/dev/null)
+	[ -z "$p0" ] || { [ "$p" = "$p0" ] && pass "the Ping Filter stayed up (pid $p0)" || info "the Ping Filter restarted (pid $p0 -> ${p:-none})"; }
+	# The ifup hook by hand, as netifd runs it: nothing to do now.
+	if [ "$(sv MODE)" = pf ]; then
+		a0=$(hp 'Ping Filter only, nothing to do') r0=$(hp 'restarting QoS-Ex')
+		ACTION=ifup INTERFACE=wan DEVICE="$(uci -q get qos-ex.settings.wan)" sh "$HOOK"; sleep 2
+		if [ "$(hp 'Ping Filter only, nothing to do')" -gt "$a0" ] && [ "$(hp 'restarting QoS-Ex')" = "$r0" ]; then
+			pass "ifup: the hook answers Ping Filter only, no restart"
+		else fail "ifup: no Ping Filter only answer from the hook, or a restart"; fi
+	fi
+	rates_back
+	t0=$(now)
+	wait_running 30 && pass "shaping again $(($(now) - t0)) s after the rates came back" || fail "not shaping 30 s after the rates came back"
+	[ "$(sv MODE)" = pf ] && fail "the stamp still says the Ping Filter only" || pass "the start stamp is a shaping one again"
+	p=$(cat "$PFR/daemon.pid" 2>/dev/null)
+	[ -z "$p0" ] || { [ "$p" = "$p0" ] && pass "the Ping Filter stayed up through both (pid $p0)" || info "the Ping Filter restarted (pid $p0 -> ${p:-none})"; }
+}
+
 test_redial() {
 	sec "TEST redial (the internet drops a few seconds)"
 	ubus call network.interface.wan status >/dev/null 2>&1 || { skip "no network interface 'wan' (netifd)"; return; }
@@ -874,11 +966,15 @@ test_speedfallback() {
 
 main() {
 	echo "QoS-Ex check $(date '+%Y-%m-%d %H:%M:%S'), script #$(sha256sum "$0" 2>/dev/null | cut -c1-10), arguments: ${*:-none}"
-	versions; shaper; nftables; queues; dscp_restore; ef_fixes; ctmark; hook; counters; app_calls; gameflows; pingfilter; logs
+	versions; shaper
+	# The Ping Filter only (both rates 0): no queue or rule set to check.
+	if [ "$(sv MODE)" = pf ]; then pfonly
+	else nftables; queues; dscp_restore; ef_fixes; ctmark; fi
+	hook; counters; app_calls; gameflows; pingfilter; logs
 	for a in "$@"; do
 		case "$a" in
 			match) match ;;
-			reload|burst|restart|ifb|branch|redial|rules|queue|update|speedtest|speedfallback) "test_$a" ;;
+			reload|burst|restart|ifb|branch|redial|rules|queue|pfonly|update|speedtest|speedfallback) "test_$a" ;;
 			debug) sec "Debug report (sanitized)"; cat "$T/debug" 2>/dev/null || "$Q" debug 2>&1 ;;
 			*) sec "Unknown argument: $a" ;;
 		esac
@@ -891,7 +987,7 @@ main() {
 # then renamed into place: a fixed /tmp name is anyone's to plant. A run
 # that is interrupted keeps what it had written.
 T=$(mktemp -d /tmp/qos-ex-check.XXXXXX) || { echo "mktemp failed"; exit 1; }
-trap '[ -f "$T/rv" ] && uci -q revert qos-ex.autosetup.test_url; mv -f "$T/report" "$OUT" 2>/dev/null; rm -rf "$T"' EXIT
+trap 'rates_back; [ -f "$T/rv" ] && uci -q revert qos-ex.autosetup.test_url; mv -f "$T/report" "$OUT" 2>/dev/null; rm -rf "$T"' EXIT
 trap 'exit 1' INT TERM
 main "$@" 2>&1 | tee "$T/report"
 mv -f "$T/report" "$OUT" && { echo; echo "Saved to $OUT"; }
