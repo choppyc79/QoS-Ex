@@ -21,7 +21,7 @@
 # Software Foundation, either version 3 of the License, or (at your option)
 # any later version.  See <https://www.gnu.org/licenses/> for details.
 
-VERSION="3.2.2.8"
+VERSION="3.2.2.9"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="QoS-Ex"
@@ -3079,6 +3079,29 @@ _start_abort() {
 	return 1
 }
 
+# Both rates 0 (_start_locked): the Ping Filter only, with no queue, IFB or
+# rule set. The stamp says so (MODE=pf): stop removes no qdisc (UP / DN 0),
+# reload follows only the Ping Filter's settings, and the ifup hook and the
+# pages see it running. It names no device: a device the stamp names counts
+# as QoS-Ex's (_dev_ours), and another shaper's queue on the WAN is not.
+_start_pf_only() {
+	local _upt=""
+	read -r _upt _ < /proc/uptime 2>/dev/null
+	printf 'MODE=pf\nUP=0\nDN=0\nUPT=%s\n' "${_upt%%.*}" > /var/run/qos-ex-started 2>/dev/null
+	rm -f "$START_PART" 2>/dev/null
+	log "Started: Ping Filter only (both rates 0)"
+	msg "Started (Ping Filter only, nothing shaped) v$VERSION"
+	[ "$(uci -q get "$UCI_CFG.pingfilter.enabled")" = 1 ] ||
+		msg "the Ping Filter is off: set it up on Ping Filter -> Dashboard"
+	[ "${_PF_KEEP:-0}" = 1 ] && return 0
+	pf_start
+	_pf_sig > "$PF_SIG" 2>/dev/null
+	return 0
+}
+
+# The running start is the Ping Filter only (its stamp says so).
+_pf_only_run() { grep -qx 'MODE=pf' /var/run/qos-ex-started 2>/dev/null; }
+
 start() {
 	# When procd owns the service, start through the init script so the
 	# Ping Filter instance is registered.
@@ -3111,10 +3134,15 @@ _start_locked() {
 	[ $? = 1 ] && msg "WARNING: wan '$WAN' is not the device of any interface that is up - autostart (the ifup hook) and classification both need that device (ip route get 1.1.1.1)"
 	calc_bandwidth
 	_ct_acct_on
+	# Both rates 0: the Ping Filter only. Nothing is built, so nothing of
+	# another shaper's is checked or touched.
+	if [ "$SHAPE_UP$SHAPE_DN" = 00 ]; then
+		_start_pf_only
+		return $?
+	fi
 	_QOS_EX_CTM=$(_ctmark_users)
 	[ -z "$_QOS_EX_CTM" ] || { printf '[%s] WARNING: %s\n' "$DISPLAY_NAME" "$_QOS_EX_CTM's mmx_mask overlaps the conntrack-mark bits QoS-Ex writes (0xff0000bf), so its line choices do not hold - the default 0x3F00 does not overlap"
 		_logline "WARN" "$_QOS_EX_CTM's mmx_mask overlaps the conntrack-mark bits QoS-Ex writes (0xff0000bf), so its line choices do not hold - the default 0x3F00 does not overlap"; }
-	[ "$SHAPE_UP$SHAPE_DN" != 00 ] || { err "upload_kbps and download_kbps are both 0 - nothing to shape"; return 1; }
 	if [ "$DL_LAN" = 1 ] && [ "$SHAPE_DN" = 1 ]; then
 		if [ -z "$LAN_DEV" ] || ! ip link show "$IFB" >/dev/null 2>&1; then
 			err "download_on lan: LAN device '${LAN_DEV:-none}' not found - set it in Setup -> Queue (settings.lan)"; return 1
@@ -3299,6 +3327,25 @@ _reload_locked() {
 		else
 			msg "Disabled in UCI - nothing to reload"
 		fi
+		return 0
+	fi
+	# The Ping Filter only at the last start: no queue to compare. Both rates
+	# still 0: only the Ping Filter follows its settings. A rate set: the
+	# shaper starts, and the Ping Filter stays up through it.
+	if _pf_only_run; then
+		calc_bandwidth
+		if [ "$SHAPE_UP$SHAPE_DN" = 00 ]; then
+			_pf_sync
+			return 0
+		fi
+		msg "a rate is set - starting the shaper (was the Ping Filter only)"
+		local _rc
+		_PF_KEEP=1
+		_stop_locked
+		_start_locked; _rc=$?
+		_PF_KEEP=0
+		[ "$_rc" = 0 ] || return "$_rc"
+		_pf_sync
 		return 0
 	fi
 	ip link show "$WAN" >/dev/null 2>&1 || { err "WAN $WAN not found"; return 1; }
@@ -3588,6 +3635,10 @@ state() {
 	echo "shape_up=$SHAPE_UP"
 	echo "shape_dn=$SHAPE_DN"
 	echo "running=$_RUN"
+	# Started with both rates 0: the Ping Filter only (running stays 0).
+	local _pfo=0
+	_pf_only_run && _pfo=1
+	echo "pf_only=$_pfo"
 	# PF on only under the master switch; activity active | matchmaking | idle.
 	local _pfon _pfact=idle _pft
 	config_get _pfon pingfilter enabled 0
@@ -3624,7 +3675,7 @@ state() {
 	echo "nft_table=$st_nft"
 	[ -f /etc/init.d/$SCRIPT_NAME ]             && echo "init=1"    || echo "init=0"
 	[ -f /etc/hotplug.d/iface/99-$SCRIPT_NAME ] && echo "hotplug=1" || echo "hotplug=0"
-	_state_uptime "$_RUN"
+	_state_uptime "$((_RUN | _pfo))"
 	echo "@@STATE_END@@"
 }
 
@@ -3736,6 +3787,9 @@ status() {
 	echo "shape_up=$SHAPE_UP"
 	echo "shape_dn=$SHAPE_DN"
 	echo "running=$_RUN"
+	local _pfo=0
+	_pf_only_run && _pfo=1
+	echo "pf_only=$_pfo"
 	echo "bw_headroom=$BW_HEADROOM"
 	echo "bw_ratio=$BW_MAX_RATIO"
 	echo "bw_ratio_eff=$BW_RATIO_EFF"
@@ -3816,7 +3870,7 @@ status() {
 	echo "nft_table=$st_nft"
 	echo "init=$st_init"
 	echo "hotplug=$st_hotplug"
-	_state_uptime "$_RUN"
+	_state_uptime "$((_RUN | _pfo))"
 	echo "@@STATE_END@@"
 
 	local mpu_disp="$MPU"
@@ -4032,6 +4086,8 @@ status() {
 	echo "--- Overall ---"
 	if [ "$_RUN" = 1 ]; then
 		echo "  [ok] $SCRIPT_NAME is RUNNING"
+	elif [ "$_pfo" = 1 ]; then
+		echo "  [ok] $SCRIPT_NAME is RUNNING the Ping Filter only (both rates 0: nothing is shaped)"
 	else
 		echo "  [--] $SCRIPT_NAME is NOT running"
 	fi
@@ -4500,19 +4556,29 @@ counters() {
 	_LOG_QUIET=1
 	load_config
 	calc_bandwidth
-	stats_counters
+	if _pf_only_run; then _counters_pf_only; else stats_counters; fi
+}
+
+# The Ping Filter only: nothing shaped, so no queue to read (the IFB name may
+# be another shaper's). The rpcd shim answers the same.
+_counters_pf_only() {
+	printf '@@COUNTERS@@\nts=%s\nul_kbps=0\ndl_kbps=0\npf_only=1\n@@COUNTERS_END@@\n' "$(date +%s)"
 }
 
 stats() {
 	_LOG_QUIET=1
 	load_config
 	calc_bandwidth   # derive GAME_UP/GAME_DN from the loaded rates
-	stats_counters
+	if _pf_only_run; then _counters_pf_only; else stats_counters; fi
 	echo "=== $SCRIPT_NAME v$VERSION — stats (qdisc=$QDISC) ==="
 	echo ""
 	local active=0
 	tc qdisc show dev "$WAN" 2>/dev/null | grep -qE 'cake|hfsc|htb' && active=1
 	[ "$SHAPE_UP" = 0 ] && tc qdisc show dev "$IFB" 2>/dev/null | grep -qE 'cake|hfsc|htb' && active=1
+	if _pf_only_run; then
+		echo "QoS-Ex runs the Ping Filter only (both rates 0): nothing is shaped. Set the line's speeds on Setup -> Line, or run Auto Setup, to shape it."
+		return 0
+	fi
 	if [ "$active" = "0" ]; then
 		echo "QoS-Ex is not running. Turn the Shaper on in the Overview (Restart if it is on) or run: $QOS_EX_BIN enable"
 		return 0
