@@ -5,7 +5,19 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.3 · Ping Filter 2.1.0.7 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.4 · Ping Filter 2.1.0.7 · shaper 3.2.2.9**
+
+## LuCI app 1.4.1.4
+
+- Added: **Ping Filter only** on Auto Setup's first card, for a line that needs no shaping or a router too slow to shape it. It skips the speed test and the devices, sets both rates to 0 and sizes the Ping Filter for the router (Lite, the server list, how often it is saved), then opens the Ping Filter **Dashboard**, whose setup card picks the gaming device, the mode and home. Typing 0 for both speeds does the same.
+- Added: after a speed test, Auto Setup offers **Use Ping Filter only** when no queue keeps up with the line on the router, or when the line kept its ping under full load without shaping.
+- Changed: with both rates at 0 the banner and the QoS-Ex box on LuCI's **Status → Overview** read **Ping Filter only**, and the Ping Filter shows as on while it runs (before, only while shaping). The **Overview** says nothing is shaped and has **Shape the line…** (Auto Setup again); **Live → Stats** and **System → Status** say so too, and Setup's rate help says both 0 = Ping Filter only.
+
+## Shaper 3.2.2.9
+
+- Added: both rates at 0 run the Ping Filter only: no queue, IFB or rule set, so nothing of another shaper's on the line is checked or touched. Flow offloading still goes off when QoS-Ex is switched on: the Ping Filter needs it off. Set a rate and the shaper starts; the Ping Filter stays up through the change, both ways.
+- Fixed: with both rates at 0 the shaper refused to start ("nothing to shape"), and the Ping Filter kept running only until the next start: every start stops first, the stop parks the Ping Filter, and only a shaper start let it go again. A reboot, a PPPoE redial or the next Save & Apply left it off. The ifup hook restarted QoS-Ex on every ifup, and LuCI read the router as stopped.
+- Added: Auto Setup's suggestions for 0 and 0 (`qos-ex.sh autosetup suggest 0 0`) give only the rows that matter with nothing shaped, and after a speed test it can offer the Ping Filter only (a `pfonly|` line): when no queue keeps up with the line, or when its ping rose less than `autosetup.bloat_ok_ms` (new, 5 ms) each way at the line's own limit.
 
 ## Ping Filter 2.1.0.7
 
