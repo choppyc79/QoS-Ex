@@ -32,7 +32,8 @@ LuCI pauses; the two Live pages have their own refresh selector.
 
 The banner above the tabs shows the QoS-Ex release installed beside the
 name (for example **QoS-Ex v1.1.0**), whether the shaper and the Ping Filter
-are on, whether a game is being played, the main figures for the tab you are
+are on (one **Ping Filter only** pill with both rates at 0), whether a game
+is being played, the main figures for the tab you are
 on, and at the right the branch installed, `main` or `dev`. On `dev` the
 number is the last release: dev holds the changes made since. The version
 of each part is on **System → Maintenance → Versions & updates**.
@@ -92,10 +93,16 @@ is done it goes away.
 
 ### Getting started
 
-The **Set up QoS-Ex** card offers three choices:
+The **Set up QoS-Ex** card offers four choices:
 
 - **Auto Setup** — runs the router check and the speed test, then takes you
   through the steps below.
+- **Ping Filter only** — no shaping, for a line that keeps its ping under
+  load or a router too slow to shape it. No speed test and no devices: one
+  step lists the settings (both rates 0, the Ping Filter sized for the
+  router), and **Apply and start** turns QoS-Ex on and opens the Ping Filter
+  **Dashboard**, whose setup card does the rest. **Back** returns to the
+  choices. Typing 0 for both speeds in step ① does the same.
 - **Manual setup** — keeps the defaults (CAKE, Adaptive rules) and opens
   **Setup → Line**. If QoS-Ex was set up before, this reads **Keep current
   settings** and changes nothing.
@@ -228,6 +235,11 @@ the shaper on. The button reads **Finish and start** when nothing needs to
 change, and just **Apply** or **Finish** while the shaper is already
 running. The Overview opens when it is done.
 
+When the speed test found that no queue keeps up with your line on this
+router, or that the line kept its ping under full load without shaping (it
+rose less than 5 ms each way, `bloat_ok_ms`, at the line's own speed), a row
+says so with a **Use Ping Filter only** button.
+
 **Packet steering** spreads the work of receiving packets over the CPU
 cores. If it is off on a router with more than one core, Auto Setup offers a
 separate **Turn on** button. Packet steering is an OpenWrt network setting,
@@ -273,7 +285,9 @@ The other cards are always there:
   Under the switch: the queue type and rule set, how long the shaper has been
   running, and the rates it shapes at. **Restart** stops and starts the
   shaper. **Reload rules** reloads the rules, and restarts the shaper only if
-  a queue setting has changed. **Settings** opens Setup.
+  a queue setting has changed. **Settings** opens Setup. With both rates at
+  0 it reads **Ping Filter only · both rates 0** and **nothing shaped**, and
+  **Shape the line…** opens Auto Setup again.
 - **Ping Filter** — the switch, the mode in words (`Ping ≤ 40 ms`,
   `Distance ≤ 1000 km · Ping Catch ≤ 40 ms`, `Watch only`), and what it is
   doing:
@@ -588,7 +602,8 @@ rules.
   not exist, or a switch's CPU port, stops QoS-Ex from starting and says
   so. One that exists but is not your line is flagged as a WAN mismatch.
 - **Download rate (Mbps)** and **Upload rate (Mbps)** — your line speed as a
-  speed test measures it. `0` leaves that direction unshaped.
+  speed test measures it. `0` leaves that direction unshaped; both `0` runs
+  the Ping Filter only, with nothing shaped.
 - **Headroom** — how far under the line speed to shape: 100% (off), or 95%
   down to 70%; 90% by default. Shaping a little under the line keeps the
   queue on the router, where QoS-Ex controls it, rather than in the modem or
