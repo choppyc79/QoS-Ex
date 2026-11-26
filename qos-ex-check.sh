@@ -582,6 +582,22 @@ pingfilter() {
 	[ "$n" -le 2000 ] && pass "/24 memory: $n rows (at most 2000)" || fail "/24 memory: $n rows (more than 2000)"
 	n=$(lines "$PFR/telemetry-hist.tsv")
 	[ "$n" -le $((m + 50)) ] && pass "play history: $n rows (at most $((m + 50)))" || fail "play history: $n rows (more than $((m + 50)))"
+	# 2.1.0.6 / 2.1.0.7: no graded server or played match with more gaps than
+	# can fit (a gap is a silence over 120 ms: 500 a minute at most), on the
+	# router or in its copy on flash (a start puts that copy back when the
+	# router's list is empty; 2.1.0.7 saves the drop at once).
+	fl=""
+	for f in "$PFR/telemetry-hist.tsv" "$PFR/sessions.tsv" /etc/qos-ex/pf-cache/telemetry.tsv /etc/qos-ex/pf-cache/sessions.tsv; do
+		[ -s "$f" ] && fl="$fl $f"
+	done
+	if [ -z "$fl" ]; then
+		info "no graded servers or played matches yet"
+	else
+		# shellcheck disable=SC2086 # file paths, no blanks
+		x=$(awk -F'\t' '{ g = (FILENAME ~ /sessions/) ? $6 : $7 } $3 + 0 > 0 && g * 120 > $3 * 1000 { n++ } END { print n + 0 }' $fl 2>/dev/null)
+		[ "${x:-0}" = 0 ] && pass "no grade or match with more gaps than can fit, live or on flash (2.1.0.7)" \
+			|| fail "$x grade(s) or match(es) with more gaps than can fit (over 500 a minute), live or on flash"
+	fi
 	j=$("$PFB" matchmaking 2>/dev/null)
 	jsonfilter -s "$j" -e '@.servers' >/dev/null 2>&1 && pass "matchmaking prints valid JSON (2.0.9.3)" || fail "matchmaking output is not JSON"
 	n=$(logread 2>/dev/null | grep -c 'Terminated')
