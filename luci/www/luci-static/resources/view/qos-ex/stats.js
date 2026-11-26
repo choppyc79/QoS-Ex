@@ -355,7 +355,7 @@ return view.extend({
 			/^(cake|hfsc|htb)$/.test(cs.meta.qd_down || '');
 		// Nothing to sample while the shaper is down: say so, and offer the
 		// way to start it, instead of empty charts polling every 5 s.
-		if (!running) return E([], [ h.pageHead(_('Stats')), h.shaperOffCard() ]);
+		if (!running) return E([], [ h.pageHead(_('Stats')), h.shaperOffCard(cs.meta.pf_only === '1') ]);
 		var DIRS = [ 'down', 'up' ];
 
 		view.cur     = cs;
