@@ -5,7 +5,14 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.3 · Ping Filter 2.1.0.6 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.3 · Ping Filter 2.1.0.7 · shaper 3.2.2.8**
+
+## Ping Filter 2.1.0.7
+
+- Fixed: 2.1.0.6's clean-up did not stick on the routers it was written for, where every graded server and played match had impossible stutter. The log said they were dropped, then the Ping Filter put them back from its copy on flash as it started, so the same grades stayed. The drop is now saved to flash at once, and the jitter those matches left on each server (the **Servers** list scores on it once the grade is gone) is cleared with it. When there was no graded history, the log line counted the dropped matches as graded servers; it no longer does.
+- Fixed: when only the Ping Filter was updated, its background service, restarting at the same moment, could put the server list back as it was a moment before, undoing what the update had just changed in it (its re-grade and the clean-up above).
+- Fixed: clearing the **Always allow** or **Always block** list right after **Clear cache** brought its servers back at the next restart or settings change.
+- Fixed: **Ignore UDP ports** written with a leading zero (`03478-03481`) were left out without a word; they now count as written.
 
 ## Ping Filter 2.1.0.6
 
