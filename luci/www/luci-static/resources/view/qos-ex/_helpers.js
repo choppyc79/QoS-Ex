@@ -588,7 +588,8 @@ return baseclass.extend({
 	liveRateSet: function(page, sec) {
 		try { window.localStorage.setItem('qosex:rate:' + page, String(sec)); } catch (e) {}
 	},
-	// Wait (up to secs, 30 by default) until the shaper runs, or is off.
+	// Wait (up to secs, 30 by default) until the shaper runs (or the Ping
+	// Filter only, both rates 0), or is off.
 	waitShaper: function(secs) {
 		var h = this, n = 0, max = secs || 30;
 		return new Promise(function(ok, bad) {
@@ -599,7 +600,7 @@ return baseclass.extend({
 				};
 				h.callState().then(function(r) {
 					var s = h.parseState((r && r.output) || '').state;
-					if (s.enabled != null && (s.enabled !== '1' || h.running(s))) ok(s);
+					if (s.enabled != null && (s.enabled !== '1' || h.running(s) || s.pf_only === '1')) ok(s);
 					else again();
 				}, again);
 			})();
@@ -1291,9 +1292,11 @@ return baseclass.extend({
 		return st.running != null ? st.running === '1'
 			: (st.root_qdisc === '1' && st.nft_table === '1');
 	},
-	// True for a component that belongs to an unshaped direction.
+	// True for a component that belongs to an unshaped direction (with both
+	// rates 0, the Ping Filter only, the rule set too).
 	compOff: function(st, key) {
 		if (key === 'root_qdisc') return st.shape_up === '0';
+		if (key === 'nft_table') return st.pf_only === '1';
 		return (key === 'ingress_qdisc' || key === 'ifb_up' || key === 'ctinfo') && st.shape_dn === '0';
 	},
 
@@ -1618,14 +1621,22 @@ return baseclass.extend({
 		bar.qosExFeed = function(r) {
 			var st = self.parseState((r && r.output) || '').state;
 			if (st.version == null) return;
-			// Ping Filter is ON only while the shaper runs: enabled but
-			// stopped is OFF here, as on the Status-page tile.
-			var run = self.running(st), pfOn = st.pf_on === '1' && run, act = st.pf_act || 'idle';
+			// Ping Filter is ON only while QoS-Ex runs (shaping, or the Ping
+			// Filter only): enabled but stopped is OFF here, as on the
+			// Status-page tile.
+			var run = self.running(st), pfo = st.pf_only === '1';
+			var pfOn = st.pf_on === '1' && (run || pfo), act = st.pf_act || 'idle';
 			// A real dot, not the ● character: it can carry the dark-theme glow.
 			function sdot() { return E('i', { 'class': 'qx-sdot' }); }
-			var out = [ pill(run ? 'on' : 'off', [ sdot(), ' ', run ? _('Shaping') : _('Stopped') ], _('Shaper')) ];
-			if (st.pf_on != null)
-				out.push(pill(pfOn ? 'on' : 'off', [ sdot(), ' ' + _('Ping Filter') + ' ' + (pfOn ? _('ON') : _('OFF')) ], _('Ping Filter')));
+			var out;
+			// The Ping Filter only (both rates 0): one pill says both.
+			if (pfo) out = [ pill(pfOn ? 'on' : 'off', [ sdot(), ' ', _('Ping Filter only') ],
+				pfOn ? _('Nothing is shaped: both rates are 0') : _('Nothing is shaped, and the Ping Filter is off')) ];
+			else {
+				out = [ pill(run ? 'on' : 'off', [ sdot(), ' ', run ? _('Shaping') : _('Stopped') ], _('Shaper')) ];
+				if (st.pf_on != null)
+					out.push(pill(pfOn ? 'on' : 'off', [ sdot(), ' ' + _('Ping Filter') + ' ' + (pfOn ? _('ON') : _('OFF')) ], _('Ping Filter')));
+			}
 			if (pfOn) out.push(
 				act === 'active' ? pill('active', '⦿ ' + _('in match'), _('Gaming traffic is flowing now'))
 				: act === 'matchmaking' ? pill('matchmaking', '⦾ ' + _('matchmaking'), _('Console online — waiting for game traffic'))
@@ -2181,9 +2192,17 @@ return baseclass.extend({
 	// What a live page (Stats) shows while the shaper is not running: why
 	// there is nothing to draw, and the way to start it -- the switch while
 	// it is off, Restart when it is on but not running. Either reloads the
-	// page once the shaper is up. Callers have uci.load('qos-ex') done.
-	shaperOffCard: function() {
+	// page once the shaper is up. pfo: the Ping Filter only runs (both rates
+	// 0), so the way on is a rate. Callers have uci.load('qos-ex') done.
+	shaperOffCard: function(pfo) {
 		var self = this, on = uci.get('qos-ex', 'settings', 'enabled') === '1';
+		if (pfo) return E('div', { 'class': 'cbi-section qos-ex-card qx-pfoff' }, [
+			E('div', { 'class': 'qx-ctl-row' }, [
+				E('div', { 'class': 'qx-ctl-txt' }, [
+					E('div', { 'class': 'qx-now-title' }, _('The Ping Filter only: nothing is shaped')),
+					E('div', { 'class': 'qx-sub' }, _('Both rates are 0. Set the line speeds to shape it.')) ]),
+				self.go([ 'setup', '#line' ], _('Setup')) ])
+		]);
 		function done(r) {
 			if (r && r.ok) { window.location.reload(); return true; }
 			self.notifyErr(_('Could not start \u2014 check the WAN and speeds on Setup'));
