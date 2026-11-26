@@ -359,6 +359,12 @@ as_result() {
 # shaper is off).
 emit_counters() {
 	_st=/var/run/qos-ex-started; _ll=/usr/lib/qos-ex/live.sh
+	# The Ping Filter only (both rates 0): nothing shaped, so no queue to read
+	# (the IFB name may be another shaper's). The backend answers the same.
+	if [ -s "$_st" ] && grep -qx 'MODE=pf' "$_st"; then
+		printf '@@COUNTERS@@\nts=%s\nul_kbps=0\ndl_kbps=0\npf_only=1\n@@COUNTERS_END@@\n' "$(date +%s)"
+		return 0
+	fi
 	if [ -s "$_st" ] && [ -f "$_ll" ] && grep -q '^QDISC=' "$_st"; then
 		# The sliced block reads the variables set here.
 		# shellcheck disable=SC2034
@@ -387,13 +393,18 @@ emit_counters() {
 # picks the reader: HFSC / HTB skip the JSON probe, which only ever finds
 # CAKE. No stamp (or one without QDISC=): each device is probed.
 emit_tc() {
-	_w=""; _i=""; _k=""
+	_w=""; _i=""; _k=""; _m=""
 	[ -f /var/run/qos-ex-started ] && while IFS='=' read -r _a _b; do
-		case "$_a" in WAN) _w=$_b ;; IFB) _i=$_b ;; QDISC) _k=$_b ;; esac
+		case "$_a" in WAN) _w=$_b ;; IFB) _i=$_b ;; QDISC) _k=$_b ;; MODE) _m=$_b ;; esac
 	done < /var/run/qos-ex-started
 	[ -n "$_w" ] || _w=$(uci -q get "$UCI_PKG".settings.wan 2>/dev/null)
 	[ -n "$_i" ] || _i="ifb-$_w"
 	case "$_w$_i" in ''|*[!A-Za-z0-9._@-]*) printf '{"error":"bad interface name"}'; return 1 ;; esac
+	# The Ping Filter only: no queue of ours on either device.
+	if [ "$_m" = pf ]; then
+		printf '{"wan":"%s","ifb":"","pf_only":true,"egress":{"qdisc":[],"text":""},"ingress":{"qdisc":[],"text":""}}' "$_w"
+		return 0
+	fi
 	tcj() {
 		_o=$(tc -s -j "$1" show dev "$2" 2>/dev/null)
 		case "$_o" in '['*) jsonfilter -s "$_o" -e '@' >/dev/null 2>&1 && { printf '%s' "$_o"; return; } ;; esac
