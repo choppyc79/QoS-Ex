@@ -194,6 +194,7 @@ config autosetup 'autosetup'
 	option cake_max_mbit '500'
 	option fit_check '1'
 	option fit_sirq_pct '80'
+	option bloat_ok_ms '5'
 	option fallback '1'
 	option fallback_list 'https://librespeed.org/backend-servers/servers.php'
 	option rules_low 'simple'
@@ -694,6 +695,14 @@ if [ -x "$init" ]; then
 	hp_en=0
 	for hp_f in /etc/rc.d/S[0-9][0-9]$SCRIPT_NAME; do [ -e "\$hp_f" ] && hp_en=1; done
 	[ "\$hp_en" = 1 ] || exit 0
+fi
+
+# The Ping Filter only (both rates 0): no queue to rebuild. Its table names no
+# device, and a jitter tap that loses its device on a redial starts again by
+# itself, so an ifup has nothing to do.
+if [ "\$(sed -n 's/^MODE=//p' "\$hp_st" 2>/dev/null)" = pf ]; then
+	logger -t QoS-Ex-hotplug "ifup \$INTERFACE (\$DEVICE) - Ping Filter only, nothing to do"
+	exit 0
 fi
 
 # Already shaping this device: a later ifup on the same L3 device (wan6 well
@@ -2215,8 +2224,9 @@ _as_fresh() {
 }
 
 ### Suggestions: one line each, "set|key|current|suggested|why",
-### "keep|key|current|why" (the queue and rule set, shown when they stay) or
-### "note|text". Any other key already at its suggested value is left out.
+### "keep|key|current|why" (the queue and rule set, shown when they stay),
+### "note|text" or "pfonly|text" (the Ping Filter only, offered instead). Any
+### other key already at its suggested value is left out.
 
 _as_sug() {   # $1 = key, $2 = suggested, $3 = why
 	local _cur
@@ -2228,6 +2238,8 @@ _as_sug() {   # $1 = key, $2 = suggested, $3 = why
 	printf 'set|%s|%s|%s|%s\n' "$1" "$_cur" "$2" "$3"
 }
 _as_note() { printf 'note|%s\n' "$1"; }
+# The Ping Filter only, offered instead (a button on the page).
+_as_alt() { printf 'pfonly|%s\n' "$1"; }
 _as_keep() { printf 'keep|%s|%s|%s\n' "$1" "$(uci -q get "$UCI_CFG.$1")" "$2"; }
 
 # fit_sirq_pct into _th: 10-100, else 80.
@@ -2316,7 +2328,7 @@ _as_fitq() {
 
 _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 	local _hr _dn="" _up="" _src="" _v _q _w _oh _ll _lim="" _busy=0 _mgr _why _qsel _mx=0 _cm _st=0 _ln _ls
-	local _fcap="" _fstop="" _cpu _qw _l0 _fw _pw _sw
+	local _fcap="" _fstop="" _cpu _qw _l0 _fw _pw _sw _bo
 	# Line rates are the line's speed: the shaper takes Headroom off them.
 	_hr=$(uci -q get "$UCI_CFG.settings.bw_headroom")
 	_isnum "$_hr" && [ "$_hr" -ge 50 ] && [ "$_hr" -le 100 ] || _hr=90
@@ -2338,6 +2350,13 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		done
 	elif [ -n "$AS_DSL" ] && [ "$AS_DSL_DN" -gt 0 ]; then
 		_dn=$AS_DSL_DN; _up=$AS_DSL_UP; _src="the DSL sync rate"
+	fi
+	# Both given as 0: the Ping Filter only. Only the rows that matter with
+	# nothing shaped: the WAN, the rates, the Ping Filter's sizing and packet
+	# steering; no queue, rule set or overhead.
+	local _pfo=0 _z="0 = this direction is not shaped"
+	if [ "$_src" = "the speeds given" ] && [ "$_dn" = 0 ] && [ "$_up" = 0 ]; then
+		_pfo=1; _z="the Ping Filter only: nothing is shaped"
 	fi
 	# The faster line rate as it will be suggested (never over the WAN port):
 	# the queue is picked for it, and the rate rows follow the queue's cap.
@@ -2403,7 +2422,7 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			_isnum "$_q" || continue
 			if [ "$_q" = 0 ]; then
 				# Typed 0: that direction is not shaped. A test 0 failed.
-				[ "$_src" = "the speeds given" ] && _as_sug "settings.${_v% *}" 0 "0 = this direction is not shaped"
+				[ "$_src" = "the speeds given" ] && _as_sug "settings.${_v% *}" 0 "$_z"
 				continue
 			fi
 			# Never over the WAN port's speed, and the row says so.
@@ -2453,46 +2472,48 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			_v=" The speed test may not have run over $AS_WAN: if its speeds look low, type them."
 		_as_note "$_ln lines have a default route ($_ls). QoS-Ex shapes $AS_WAN only: send the gaming devices out through it (an mwan3 rule or pbr).$_v"
 	fi
-	# The queue picked above, always shown.
-	_q=$(uci -q get "$UCI_CFG.settings.qdisc")
-	if [ "$_q" = "$_qsel" ]; then _as_keep settings.qdisc "$_qw"; else _as_sug settings.qdisc "$_qsel" "$_qw"; fi
-	# Leaf queue inside the HFSC / HTB classes: sfq on a low-spec router.
-	if [ "$_qsel" != cake ]; then
-		_q=$(uci -q get "$UCI_CFG.hfsc.default_qdisc")
-		if [ "$AS_TIER" = low ]; then
-			_w="low-spec router: sfq costs less CPU than fq_codel"
-			if [ "${_q:-fq_codel}" = sfq ]; then _as_keep hfsc.default_qdisc "$_w"; else _as_sug hfsc.default_qdisc sfq "$_w"; fi
-		elif [ "${_q:-fq_codel}" = fq_codel ]; then
-			_as_keep hfsc.default_qdisc "$AS_TIER-spec router: fq_codel keeps latency lower than sfq"
-		else
-			_as_sug hfsc.default_qdisc fq_codel "$AS_TIER-spec router: fq_codel keeps latency lower than sfq"
+	if [ "$_pfo" = 0 ]; then
+		# The queue picked above, always shown.
+		_q=$(uci -q get "$UCI_CFG.settings.qdisc")
+		if [ "$_q" = "$_qsel" ]; then _as_keep settings.qdisc "$_qw"; else _as_sug settings.qdisc "$_qsel" "$_qw"; fi
+		# Leaf queue inside the HFSC / HTB classes: sfq on a low-spec router.
+		if [ "$_qsel" != cake ]; then
+			_q=$(uci -q get "$UCI_CFG.hfsc.default_qdisc")
+			if [ "$AS_TIER" = low ]; then
+				_w="low-spec router: sfq costs less CPU than fq_codel"
+				if [ "${_q:-fq_codel}" = sfq ]; then _as_keep hfsc.default_qdisc "$_w"; else _as_sug hfsc.default_qdisc sfq "$_w"; fi
+			elif [ "${_q:-fq_codel}" = fq_codel ]; then
+				_as_keep hfsc.default_qdisc "$AS_TIER-spec router: fq_codel keeps latency lower than sfq"
+			else
+				_as_sug hfsc.default_qdisc fq_codel "$AS_TIER-spec router: fq_codel keeps latency lower than sfq"
+			fi
 		fi
-	fi
-	# Rule set: the rating's (rules_<tier>).
-	_q=$(uci -q get "$UCI_CFG.settings.nft_mode")
-	_w=$(uci -q get "$UCI_CFG.autosetup.rules_$AS_TIER")
-	case "$_w" in
-		simple|advanced|adaptive) ;;
-		*) if [ "$AS_TIER" = low ]; then _w=simple; else _w=adaptive; fi ;;
-	esac
-	_why="$AS_TIER-spec router ($_cpu)"
-	if [ "$_q" = "$_w" ]; then _as_keep settings.nft_mode "$_why"
-	else _as_sug settings.nft_mode "$_w" "$_why"; fi
-	# Where the download is shaped: on the LAN device as the traffic leaves
-	# (no IFB, no redirect: one qdisc pass less a packet) on a low-spec
-	# router whose one LAN device carries every LAN network; the IFB off the
-	# WAN, which covers every LAN device, otherwise.
-	_q=$(uci -q get "$UCI_CFG.settings.download_on")
-	if [ "$AS_TIER" = low ] && [ -n "$AS_LAN" ] && [ "$AS_LAN_N" = 1 ]; then
-		_w="low-spec router: the download is shaped on $AS_LAN as it leaves, with no IFB device to pass through"
-		if [ "${_q:-wan}" = lan ]; then _as_keep settings.download_on "$_w"; else _as_sug settings.download_on lan "$_w"; fi
-		[ "$(uci -q get "$UCI_CFG.settings.lan")" = "$AS_LAN" ] || _as_sug settings.lan "$AS_LAN" "the LAN device"
-	elif [ "${_q:-wan}" = lan ]; then
-		if [ "$AS_TIER" = low ]; then _w="$AS_LAN_N LAN devices: the download shaped on one would miss the others"
-		else _w="$AS_TIER-spec router: the IFB off the WAN covers every LAN device"; fi
-		_as_sug settings.download_on wan "$_w"
-	else
-		_as_keep settings.download_on "$AS_TIER-spec router: the IFB off the WAN covers every LAN device"
+		# Rule set: the rating's (rules_<tier>).
+		_q=$(uci -q get "$UCI_CFG.settings.nft_mode")
+		_w=$(uci -q get "$UCI_CFG.autosetup.rules_$AS_TIER")
+		case "$_w" in
+			simple|advanced|adaptive) ;;
+			*) if [ "$AS_TIER" = low ]; then _w=simple; else _w=adaptive; fi ;;
+		esac
+		_why="$AS_TIER-spec router ($_cpu)"
+		if [ "$_q" = "$_w" ]; then _as_keep settings.nft_mode "$_why"
+		else _as_sug settings.nft_mode "$_w" "$_why"; fi
+		# Where the download is shaped: on the LAN device as the traffic leaves
+		# (no IFB, no redirect: one qdisc pass less a packet) on a low-spec
+		# router whose one LAN device carries every LAN network; the IFB off the
+		# WAN, which covers every LAN device, otherwise.
+		_q=$(uci -q get "$UCI_CFG.settings.download_on")
+		if [ "$AS_TIER" = low ] && [ -n "$AS_LAN" ] && [ "$AS_LAN_N" = 1 ]; then
+			_w="low-spec router: the download is shaped on $AS_LAN as it leaves, with no IFB device to pass through"
+			if [ "${_q:-wan}" = lan ]; then _as_keep settings.download_on "$_w"; else _as_sug settings.download_on lan "$_w"; fi
+			[ "$(uci -q get "$UCI_CFG.settings.lan")" = "$AS_LAN" ] || _as_sug settings.lan "$AS_LAN" "the LAN device"
+		elif [ "${_q:-wan}" = lan ]; then
+			if [ "$AS_TIER" = low ]; then _w="$AS_LAN_N LAN devices: the download shaped on one would miss the others"
+			else _w="$AS_TIER-spec router: the IFB off the WAN covers every LAN device"; fi
+			_as_sug settings.download_on wan "$_w"
+		else
+			_as_keep settings.download_on "$AS_TIER-spec router: the IFB off the WAN covers every LAN device"
+		fi
 	fi
 	# Live pages: how often Stats and Flows poll the router (each poll runs
 	# tc and nft) until a browser picks its own.
@@ -2505,20 +2526,22 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 		_as_note "The router's CPU held the speed test back (busiest core ${_busy}%): the suggested line speeds are what the router managed, and the line may be faster. Shaping takes CPU too: if Live -> Stats shows drops or the ping rises, lower the rates."
 	[ -n "$_fcap" ] &&
 		_as_note "No queue keeps up with this line on this router's CPU, so the rates are set to what it shapes (about $(_as_mbit "$_fcap") Mbit). Shaped any faster, the queue builds before QoS-Ex and the ping rises under load."
-	# Overhead: the bytes each packet carries on the wire besides IP
-	# (tc-cake: ethernet 38, bridged-ptm 22; ATM 44 when the encapsulation is
-	# unknown); PPPoE adds 8, a VLAN tag 4.
-	case "$AS_DSL" in
-		atm) _ll=atm;      _oh=44; _w="ADSL (ATM)" ;;
-		ptm) _ll=ethernet; _oh=22; _w="VDSL (PTM)" ;;
-		*)   _ll=ethernet; _oh=38; _w="Ethernet" ;;
-	esac
-	if [ "$_ll" = ethernet ]; then
-		[ "$AS_PROTO" = pppoe ] && { _oh=$((_oh + 8)); _w="$_w + PPPoE"; }
-		[ "$AS_VLAN" = yes ] && { _oh=$((_oh + 4)); _w="$_w + VLAN"; }
+	if [ "$_pfo" = 0 ]; then
+		# Overhead: the bytes each packet carries on the wire besides IP
+		# (tc-cake: ethernet 38, bridged-ptm 22; ATM 44 when the encapsulation is
+		# unknown); PPPoE adds 8, a VLAN tag 4.
+		case "$AS_DSL" in
+			atm) _ll=atm;      _oh=44; _w="ADSL (ATM)" ;;
+			ptm) _ll=ethernet; _oh=22; _w="VDSL (PTM)" ;;
+			*)   _ll=ethernet; _oh=38; _w="Ethernet" ;;
+		esac
+		if [ "$_ll" = ethernet ]; then
+			[ "$AS_PROTO" = pppoe ] && { _oh=$((_oh + 8)); _w="$_w + PPPoE"; }
+			[ "$AS_VLAN" = yes ] && { _oh=$((_oh + 4)); _w="$_w + VLAN"; }
+		fi
+		_as_sug settings.linklayer "$_ll" "$_w line"
+		_as_sug settings.overhead "$_oh" "$_w: bytes each packet carries on the wire besides IP"
 	fi
-	_as_sug settings.linklayer "$_ll" "$_w line"
-	_as_sug settings.overhead "$_oh" "$_w: bytes each packet carries on the wire besides IP"
 	# Small routers: Ping Filter Lite, a shorter server list, fewer flash writes.
 	if uci -q get "$UCI_CFG.pingfilter" >/dev/null; then
 		if [ "$AS_TIER" = low ]; then
@@ -2549,13 +2572,31 @@ _as_suggest() {   # $1 $2 = line download / upload, kbps (optional)
 			*)   _as_note "Packages missing: $AS_PKG_MISSING - install: opkg update && opkg install $AS_PKG_MISSING" ;;
 		esac
 	fi
-	[ "$AS_FOREIGN" = no ] || _as_note "Another shaper ($AS_FOREIGN) is on $AS_WAN: stop it before QoS-Ex starts."
+	if [ "$AS_FOREIGN" = no ]; then :
+	elif [ "$_pfo" = 1 ]; then _as_note "Another shaper ($AS_FOREIGN) is on $AS_WAN: the Ping Filter only works beside it, as QoS-Ex shapes nothing."
+	else _as_note "Another shaper ($AS_FOREIGN) is on $AS_WAN: stop it before QoS-Ex starts."; fi
 	_as_hw_moved &&
 		_as_note "This config was set up on other hardware ($AS_HW_SAVED, now $AS_HW): check these suggestions."
+	[ "$_pfo" = 1 ] &&
+		_as_note "The Ping Filter only: no queue and no rule set. Next, set the Ping Filter up on its own page (Ping Filter -> Dashboard: a gaming device, the mode and home)."
 	if [ "$_src" = "the speed test" ]; then
 		_v=$(_as_kv ping_idle "$AS_RUN")
 		_q=$(_as_kv ping_down "$AS_RUN"); _w=$(_as_kv ping_up "$AS_RUN")
 		_isnum "$_v" && _as_note "Ping unshaped: $_v ms idle, ${_q:-?} ms downloading, ${_w:-?} ms uploading."
+		# The Ping Filter only may be all this line needs (LuCI offers it with
+		# a button): no queue keeps up with it on this router, or it keeps its
+		# ping under full load unshaped, each direction measured at the line's
+		# own limit (not the port's or the CPU's) with under bloat_ok_ms of rise.
+		if [ -n "$_fcap" ]; then
+			_as_alt "No queue keeps up with this line on this router: the Ping Filter only keeps its full speed, with nothing shaped."
+		elif _isnum "$_v" && _isnum "$_q" && _isnum "$_w" &&
+		     [ "$(_as_kv limit_down "$AS_RUN")" = line ] && [ "$(_as_kv limit_up "$AS_RUN")" = line ]; then
+			_bo=$(_as_num bloat_ok_ms 5)
+			if [ "$_q" -gt "$_v" ]; then _q=$((_q - _v)); else _q=0; fi
+			if [ "$_w" -gt "$_v" ]; then _w=$((_w - _v)); else _w=0; fi
+			[ "$_q" -lt "$_bo" ] && [ "$_w" -lt "$_bo" ] &&
+				_as_alt "Your line kept its ping under full load without shaping (+$_q ms downloading, +$_w ms uploading): shaping gains little latency here, though its classes still put the game first. The Ping Filter only would also do."
+		fi
 	fi
 	return 0
 }
