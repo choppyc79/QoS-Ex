@@ -53,8 +53,10 @@ return baseclass.extend({
 				E('div', { 'class': 'qos-ex-tile-sub' }, [ sub || '' ]) ]);
 		}
 		var running = /^(cake|hfsc|htb)$/.test(m.qd_up || '') || /^(cake|hfsc|htb)$/.test(m.qd_down || '');
+		// The Ping Filter only (both rates 0): nothing shaped, QoS-Ex running.
+		var pfo = m.pf_only === '1';
 		function one(v) { return v === 1 || v === '1'; }
-		var pfOn = one(pf.enabled) && one(pf.master_enabled) && running;
+		var pfOn = one(pf.enabled) && one(pf.master_enabled) && (running || pfo);
 		var act = pf.activity || 'idle', cnt = h.pfCounts(pf);
 
 		// Rate now: counter bytes against the previous poll's.
@@ -68,7 +70,7 @@ return baseclass.extend({
 		});
 		self.prev = { t: now, b: b };
 		function dir(k, kbps) {
-			return !running ? [ '\u2014', '' ] : !(+kbps > 0) ? [ '\u2014', _('not shaped') ]
+			return pfo ? [ '\u2014', _('not shaped') ] : !running ? [ '\u2014', '' ] : !(+kbps > 0) ? [ '\u2014', _('not shaped') ]
 				: [ rate[k] !== undefined ? h.fmtRate(rate[k]) : '\u2026', _('of %s Mbps shaped').format(h.fmtMbps(kbps)) ];
 		}
 		var dn = dir('down', m.dl_kbps), up = dir('up', m.ul_kbps);
@@ -81,9 +83,11 @@ return baseclass.extend({
 		var root = E('div', {}, [
 			h.cssCopy(),
 			E('div', { 'style': 'display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 10px' }, [
-				pill(running ? 'on' : 'off', '\u25cf ' + (running ? _('Shaping') + ' \u00b7 ' + String(m.qdisc || g('settings', 'qdisc') || '').toUpperCase()
+				// The Ping Filter only: one pill says both, as in the banner.
+				pfo ? pill(pfOn ? 'on' : 'off', '\u25cf ' + _('Ping Filter only'))
+				: pill(running ? 'on' : 'off', '\u25cf ' + (running ? _('Shaping') + ' \u00b7 ' + String(m.qdisc || g('settings', 'qdisc') || '').toUpperCase()
 					: g('settings', 'enabled') === '1' ? _('Stopped') : _('Off'))),
-				pill(pfOn ? 'on' : 'off', '\u25cf ' + _('Ping Filter') + ' ' + (pfOn ? _('ON') : _('OFF'))),
+				pfo ? '' : pill(pfOn ? 'on' : 'off', '\u25cf ' + _('Ping Filter') + ' ' + (pfOn ? _('ON') : _('OFF'))),
 				!pfOn ? '' : pill(act === 'active' ? 'active' : act === 'matchmaking' ? 'matchmaking' : 'idle',
 					(act === 'active' ? '\u29bf ' + _('active') : act === 'matchmaking' ? '\u29be ' + _('matchmaking') : '\u2299 ' + _('idle'))),
 				!upd.length ? '' : E('a', { 'href': L.url('admin/network/qos-ex/system/maintenance'),
