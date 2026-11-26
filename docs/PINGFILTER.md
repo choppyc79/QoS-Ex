@@ -12,12 +12,14 @@ SSH commands are at the end.
 
 You need:
 
-- QoS-Ex installed and the shaper running ([SETUP.md](SETUP.md)). Ping
-  Filter is installed with it and runs only while the shaper does.
+- QoS-Ex installed and switched on ([SETUP.md](SETUP.md)). Ping Filter is
+  installed with it and runs while QoS-Ex does. With both rates at 0
+  (**Ping Filter only** in Auto Setup, or on **Setup → Line**) nothing is
+  shaped and the Ping Filter runs alone, beside another shaper too.
 - At least one device set to **Gaming** (**Setup → Devices & Ports**, or
   Auto Setup's **Devices** step).
 - Your home location (latitude and longitude, or a click on the map).
-- **Flow offloading off.** QoS-Ex turns it off when the shaper starts; it
+- **Flow offloading off.** QoS-Ex turns it off when it is switched on; it
   hides game flows from Ping Filter if it is turned back on.
 
 Ping Filter is **off** after install, and Auto Setup leaves it off: it is
