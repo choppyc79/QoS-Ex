@@ -980,7 +980,7 @@ EOL
 					clear_wl|clear_bl) ;;
 					whitelist|blacklist|forget|ungrade) ;;
 					threshold|radius|catch) ;;
-					mode|profile) ;;
+					mode|profile|try) ;;
 					*) json_err "bad verb" ;;
 				esac
 				case "$verb" in
@@ -1031,6 +1031,13 @@ EOL
 						case "$ip" in competitive|casual|distance|observe|custom) ;; *) json_err "bad profile" ;; esac
 						rc=0
 						$PFCMD profile "$ip" >/dev/null 2>&1 || rc=$?
+						;;
+					try)
+						# Try first: the mode to try (as profile / mode name it), or
+						# now (block with it) / stop (back to what ran before).
+						case "$ip" in casual|competitive|ping|distance|now|stop) ;; *) json_err "bad try" ;; esac
+						rc=0
+						$PFCMD try "$ip" >/dev/null 2>&1 || rc=$?
 						;;
 					*)
 						rc=0
