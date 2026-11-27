@@ -602,12 +602,14 @@ pingfilter() {
 				*) info "hs_quiet not reported (a Ping Filter older than 2.1.0.2)" ;;
 			esac
 			# 2.1.0.4: the listener leaves out the Ignore UDP ports set now (it
-			# keeps the list it started with: a change starts it again).
+			# keeps the list it started with: a change starts it again). Each
+			# read sits in braces: a process can end while the loop walks /proc,
+			# and ash opens a file before a 2>/dev/null after it applies.
 			lp=""; li=""
 			for p in /proc/[0-9]*; do
 				c=""; { read -r c < "$p/comm"; } 2>/dev/null; [ "$c" = awk ] || continue
-				tr '\0' '\n' < "$p/cmdline" 2>/dev/null | grep -qx 'qos_ex_pf=handshake' || continue
-				lp=${p#/proc/}; li=$(tr '\0' '\n' < "$p/cmdline" 2>/dev/null | sed -n 's/^ign=//p'); break
+				{ tr '\0' '\n' < "$p/cmdline"; } 2>/dev/null | grep -qx 'qos_ex_pf=handshake' || continue
+				lp=${p#/proc/}; li=$({ tr '\0' '\n' < "$p/cmdline"; } 2>/dev/null | sed -n 's/^ign=//p'); break
 			done
 			li=$(printf '%s\n' "$li" | awk '{ for (i = 1; i <= NF; i++) { split($i, q, "-"); s = s (s == "" ? "" : ", ") (q[1] == q[2] ? q[1] : $i) } } END { print s }')
 			if [ -z "$lp" ]; then info "the handshake listener is not running now"
