@@ -19,6 +19,8 @@
 #     queue     HTB for a moment, then back                  a settings change, undone; shaping off ~10 s twice
 #     pfonly    both rates 0 for a moment, then back         a settings change, undone (two reloads):
 #                                                            nothing shaped while it runs
+#     try       Try first: Competitive for a moment, then    a settings change, undone: nothing the
+#               Stop trying                                  Ping Filter decides is blocked meanwhile
 #     update    two Update now at once                       runs the updater: installs what changed, if anything
 #     speedtest Auto Setup's speed test and queue check      shaping and the Ping Filter off about a
 #                                                            minute; traffic to Cloudflare (or LibreSpeed)
@@ -482,10 +484,19 @@ gameflows() {
 	head -n "${1:-3}" "$T/ct" | cut -f1-8 | tr '\t' ' ' | ind
 }
 
+# The addresses in @ping_blocked that are not on Always block (the list, or
+# a server inside a listed prefix: its row reads blacklist).
+pf_blk_extra() {
+	_bl=" $(uci -q get qos-ex.pingfilter.blacklist) $(awk -F'\t' '$2 == "blacklist" { printf "%s ", $1 }' "$PFR/servers.tsv" 2>/dev/null) "
+	nft list set inet qos_ex_pf ping_blocked 2>/dev/null | tr ',' '\n' \
+		| awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print $i }' \
+		| while read -r _ip; do case "$_bl" in *" $_ip "*) ;; *) printf '%s ' "$_ip" ;; esac; done
+}
+
 pingfilter() {
 	sec "Ping Filter"
 	"$PFB" status > "$T/pf" 2>&1
-	s=""; for k in enabled master_enabled running activity block_mode threshold_ms ping_catch_ms hold_active lite offload total allowed blocked whitelist blacklist prereq_ok; do s="$s $k=$(pfk $k)"; done
+	s=""; for k in enabled master_enabled running activity block_mode threshold_ms ping_catch_ms hold_active trying lite offload total allowed blocked whitelist blacklist prereq_ok; do s="$s $k=$(pfk $k)"; done
 	info "${s# }"
 	if [ "$(pfk enabled)" = 1 ] && [ "$(pfk master_enabled)" = 1 ]; then
 		[ "$(pfk running)" = 1 ] && pass "daemon running" || fail "on, but the daemon is not running"
@@ -511,9 +522,19 @@ pingfilter() {
 		case "$(nft list chain inet qos_ex_pf enforce 2>/dev/null | grep pf-hold)" in
 			*'ct direction original ct original packets'*) pass "first-packets hold: only flows the device opened (2.0.9.9)" ;;
 			*'ct original packets'*) fail "first-packets hold also holds flows a server opened (no ct direction original)" ;;
-			'') info "no new-server hold (watch only, or first_pkts 0)" ;;
+			'') info "no new-server hold (watch only, a mode being tried, or first_pkts 0)" ;;
 			*) info "new-server hold: full hold" ;;
 		esac
+		# 2.1.0.8: Try first grades as a mode and blocks nothing but Always
+		# block: no new-server hold, nothing else in @ping_blocked.
+		if [ "$(pfk trying)" = 1 ]; then
+			info "a mode is being tried (Try first): nothing it decides is blocked"
+			if nft list chain inet qos_ex_pf enforce 2>/dev/null | grep -q pf-hold; then fail "a mode is being tried, but the new-server hold is in"
+			else pass "no new-server hold while a mode is tried (2.1.0.8)"; fi
+			x=$(pf_blk_extra)
+			[ -z "$x" ] && pass "only Always block entries are blocked while a mode is tried (2.1.0.8)" \
+				|| fail "blocked while a mode is tried, not on Always block: $(printf '%s' "$x" | cut -c1-200)"
+		fi
 		# Ping Catch (2.0.9.8): a server whose own ping is over the catch is let
 		# in only inside the radius, or while it is played (blocked after it).
 		# The Ping Filter's own functions, in a subshell: nothing is written.
@@ -551,7 +572,7 @@ pingfilter() {
 					printf '%s ~%sms %s; ' "$PF_C_IP" "$PF_C_PING" "$PF_C_SRC"
 				done 3< "$PF_SERVERS_TSV" 2>/dev/null)
 			case "$x" in
-				SKIP) info "Ping Catch with a country list or first_pkts 0: a server with no ping of its own is let in on its estimate" ;;
+				SKIP) info "Ping Catch with a country list, first_pkts 0 or a mode being tried: a server with no ping of its own is let in on its estimate" ;;
 				'') pass "Ping Catch: no server outside the radius let in on no ping of its own (2.1.0.0)" ;;
 				*) fail "Ping Catch: let in outside the radius on no ping of its own: $(printf '%s' "$x" | cut -c1-300)" ;;
 			esac
@@ -861,6 +882,56 @@ test_pfonly() {
 	[ -z "$p0" ] || { [ "$p" = "$p0" ] && pass "the Ping Filter stayed up through both (pid $p0)" || info "the Ping Filter restarted (pid $p0 -> ${p:-none})"; }
 }
 
+# test try: what ran before the try. Also from the exit trap, so a run
+# stopped part-way does not leave a mode tried.
+try_back() {
+	[ -f "$T/try" ] || return 0
+	rm -f "$T/try"
+	[ "$(uci -q get qos-ex.pingfilter.trying)" = 1 ] && "$PFB" try stop >/dev/null 2>&1
+	return 0
+}
+
+# Try first (Ping Filter 2.1.0.8): Competitive tried for a moment, then Stop
+# trying. Nothing the mode decides is blocked meanwhile; after it the mode,
+# the limit, the base ping and the hold are as they were.
+test_try() {
+	sec "TEST try: Competitive tried for a moment, then stopped"
+	"$PFB" status > "$T/pf" 2>&1
+	{ [ "$(pfk enabled)" = 1 ] && [ "$(pfk running)" = 1 ]; } || { skip "the Ping Filter is not running"; return; }
+	[ "$(pfk trying)" = 1 ] && { info "a mode is being tried already: the Ping Filter section covers it"; return; }
+	m0=$(uci -q get qos-ex.pingfilter.block_mode) t0=$(uci -q get qos-ex.pingfilter.threshold_ms)
+	b0=$(uci -q get qos-ex.pingfilter.base_ms) h0=$(pfk hold_active)
+	: > "$T/try"
+	"$PFB" try competitive >/dev/null 2>&1 || fail "pingfilter try competitive: rc $?"
+	# The re-grade runs in the background: up to 20 s for the sets to follow.
+	i=0; x=-
+	while [ "$i" -lt 20 ]; do
+		sleep 1; i=$((i + 1))
+		x=$(pf_blk_extra)
+		[ -z "$x" ] && break
+	done
+	"$PFB" status > "$T/pf" 2>&1
+	[ "$(pfk trying)" = 1 ] && pass "trying=1 after try competitive (limit $(pfk threshold_ms) ms)" || fail "trying=$(pfk trying) after try competitive"
+	if nft list chain inet qos_ex_pf enforce 2>/dev/null | grep -q pf-hold; then fail "the new-server hold is in while trying"
+	else pass "no new-server hold while trying"; fi
+	[ -z "$x" ] && pass "only Always block entries are blocked, $i s after the try" \
+		|| fail "blocked while trying, not on Always block: $(printf '%s' "$x" | cut -c1-200)"
+	j=$("$PFB" servers 2>/dev/null)
+	[ "$(jsonfilter -s "$j" -e '@.trying' 2>/dev/null)" = 1 ] && pass "the servers JSON says trying" || fail "the servers JSON has no trying 1"
+	n=$(jsonfilter -s "$j" -e '@.servers[@.state="blocked"].ip' 2>/dev/null | grep -c .)
+	w=$(jsonfilter -s "$j" -e '@.servers[@.state="would"].ip' 2>/dev/null | grep -c .)
+	[ "$n" = 0 ] && pass "no server reads blocked, $w read would block" || fail "$n server(s) read blocked while trying"
+	rm -f "$T/try"
+	"$PFB" try stop >/dev/null 2>&1 || fail "pingfilter try stop: rc $?"
+	"$PFB" status > "$T/pf" 2>&1
+	[ "$(pfk trying)" = 0 ] && pass "trying=0 after try stop" || fail "trying=$(pfk trying) after try stop"
+	m=$(uci -q get qos-ex.pingfilter.block_mode) t=$(uci -q get qos-ex.pingfilter.threshold_ms) b=$(uci -q get qos-ex.pingfilter.base_ms)
+	if [ "$m" = "$m0" ] && [ "$t" = "$t0" ] && [ "$b" = "$b0" ]; then pass "mode, limit and base ping as they were (${m0:-unset}, ${t0:-unset} ms, base ${b0:-unset})"
+	else fail "after try stop: ${m:-unset} ${t:-unset} ms base ${b:-unset}, was ${m0:-unset} ${t0:-unset} ms base ${b0:-unset}"; fi
+	[ -z "$(uci -q get qos-ex.pingfilter.try_back)" ] && pass "no try_back left" || fail "try_back still set: $(uci -q get qos-ex.pingfilter.try_back)"
+	[ "$(pfk hold_active)" = "$h0" ] && pass "the new-server hold as before (hold_active=$h0)" || fail "hold_active=$(pfk hold_active), was $h0"
+}
+
 test_redial() {
 	sec "TEST redial (the internet drops a few seconds)"
 	ubus call network.interface.wan status >/dev/null 2>&1 || { skip "no network interface 'wan' (netifd)"; return; }
@@ -974,7 +1045,7 @@ main() {
 	for a in "$@"; do
 		case "$a" in
 			match) match ;;
-			reload|burst|restart|ifb|branch|redial|rules|queue|pfonly|update|speedtest|speedfallback) "test_$a" ;;
+			reload|burst|restart|ifb|branch|redial|rules|queue|pfonly|try|update|speedtest|speedfallback) "test_$a" ;;
 			debug) sec "Debug report (sanitized)"; cat "$T/debug" 2>/dev/null || "$Q" debug 2>&1 ;;
 			*) sec "Unknown argument: $a" ;;
 		esac
@@ -987,7 +1058,7 @@ main() {
 # then renamed into place: a fixed /tmp name is anyone's to plant. A run
 # that is interrupted keeps what it had written.
 T=$(mktemp -d /tmp/qos-ex-check.XXXXXX) || { echo "mktemp failed"; exit 1; }
-trap 'rates_back; [ -f "$T/rv" ] && uci -q revert qos-ex.autosetup.test_url; mv -f "$T/report" "$OUT" 2>/dev/null; rm -rf "$T"' EXIT
+trap 'rates_back; try_back; [ -f "$T/rv" ] && uci -q revert qos-ex.autosetup.test_url; mv -f "$T/report" "$OUT" 2>/dev/null; rm -rf "$T"' EXIT
 trap 'exit 1' INT TERM
 main "$@" 2>&1 | tee "$T/report"
 mv -f "$T/report" "$OUT" && { echo; echo "Saved to $OUT"; }
