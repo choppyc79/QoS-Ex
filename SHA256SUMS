@@ -1,4 +1,4 @@
-#v release=1.1.2 luci=1.4.1.5 pf=2.1.0.8 shaper=3.2.2.9
+#v release=1.1.3 luci=1.4.1.5 pf=2.1.0.8 shaper=3.2.2.9
 45e62bfc3c737a5ad8ee85402c9cd0055280836391d81c4b059a90f0b65b47b3  QoS-Ex.sh
 23e209df2f662831e970ccc382f06bdbeac22e29a8a305e93f456c66798738ec  lib/install.sh
 e56fd8f0c675dfe864318b2b40a353957d2af85fda4134fd750b8b546fa1805d  QoS-Ex-PF.sh
