@@ -92,6 +92,18 @@ A change on the Dashboard or the Map applies at once, even to the server you
 are playing on; a warning shows while a match is on. Each mode keeps its own
 number, so you can switch back and forth.
 
+**Try first.** To see what a mode would block before it blocks anything,
+press **Try first** on the **Ping** or **Distance** card. The mode grades
+servers as usual but blocks nothing: only the **Always block** list still
+blocks (a country list does not, and new servers are not held). Servers it
+would block read **would block** on the Servers list and the Map, and the
+card counts them and names the ones your devices are talking to now. A
+server named there is one **Block now** would cut: if your game needs it
+(an online service rather than a match server), **Allow** it on the Servers
+list first. **Block now** turns the mode on, at once; **Stop trying** goes
+back to what ran before. While trying, **Casual**, **Competitive** and a new
+limit, radius or Ping Catch are tried too; picking a mode card ends the try.
+
 ### Always allow or block a server
 
 On **Servers**, press **Allow** or **Block** on its row (press it again to
@@ -264,6 +276,17 @@ qos-ex.sh pingfilter catch 40         # Ping Catch, ms (0 = off)
 
 These apply at once, also to the server being played.
 
+**Try a mode first.** Graded as usual, nothing blocked but the Always block
+list:
+
+```sh
+qos-ex.sh pingfilter try competitive  # or casual, ping (its own limit), distance
+qos-ex.sh pingfilter try now          # block with the mode tried
+qos-ex.sh pingfilter try stop         # back to what ran before
+```
+
+`profile` and `mode` end a try; `threshold`, `radius` and `catch` keep it.
+
 **Check it.**
 
 ```sh
@@ -311,6 +334,8 @@ range-checks every number.
 | `block_mode` | `ping` | `ping` or `distance` |
 | `threshold_ms` | `0` | Ping limit, 0–5000. `0` = Watch only: only the Always block list and a country list block |
 | `base_ms` | *(empty)* | Your base ping as **Casual** / **Competitive** last measured it (the router's ping to `autosetup.ping_host`); their limit is it + 80 / + 40 ms. Written by them; the filter itself does not read it |
+| `trying` | *(empty)* | `1` while a mode is tried (**Try first**): graded as usual, nothing blocked but the Always block list. Written by `pingfilter try` |
+| `try_back` | *(empty)* | What ran before the try (`mode limit base`), put back by **Stop trying**. Written by `pingfilter try` |
 | `home_lat` / `home_lon` | *(empty)* | Your location |
 | `home_radius_km` | `1000` | Distance-mode radius, 50–20000 |
 | `ping_catch_ms` | `0` | Distance mode, 0–250: outside the radius, servers whose ping is at or under this are let in too. Inside the radius every server is. `0` = the radius alone decides |
