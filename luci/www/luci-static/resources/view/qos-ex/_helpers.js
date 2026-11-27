@@ -487,7 +487,7 @@ function ctRow(line) {
 }
 
 var PF_STATE_TXT = { allowed: _('allowed'), blocked: _('blocked'), whitelist: _('always allowed'),
-	blacklist: _('always blocked'), cached: _('cached'), held: _('held') };
+	blacklist: _('always blocked'), cached: _('cached'), held: _('held'), would: _('would block') };
 
 return baseclass.extend({
 	callStatus:    cacheTap('status', rpc.declare({ object: 'qos-ex', method: 'status' })),
@@ -759,7 +759,7 @@ return baseclass.extend({
 		function g(k) { return uci.get('qos-ex', 'pingfilter', k); }
 		return { block_mode: g('block_mode') || 'ping', threshold: g('threshold_ms') | 0,
 			home_radius_km: parseInt(g('home_radius_km'), 10) || 1000, ping_catch: g('ping_catch_ms') | 0,
-			base: g('base_ms') | 0 };
+			base: g('base_ms') | 0, trying: g('trying') === '1' };
 	},
 	// The Ping preset a limit came from: the base ping the router measured
 	// at the pick (pingfilter.base_ms) + 80 = Casual, + 40 = Competitive;
@@ -773,10 +773,15 @@ return baseclass.extend({
 	// the Dashboard, short for the banner, the Overview and the Status tile.
 	pfModeText: function(j, short) {
 		var thr = j.threshold | 0, ctc = j.ping_catch | 0;
+		// Try first: graded as the mode, nothing blocked (the reply's
+		// trying 1, or pfUci()'s true).
+		var t = j.trying === true || (j.trying | 0) === 1;
 		if (j.block_mode === 'distance')
-			return (short ? _('Distance ≤ %d km') : _('Blocking servers outside %d km')).format(parseInt(j.home_radius_km, 10) || 1000) +
+			return (short ? (t ? _('Trying: Distance ≤ %d km') : _('Distance ≤ %d km'))
+				: (t ? _('Trying: would block servers outside %d km') : _('Blocking servers outside %d km'))).format(parseInt(j.home_radius_km, 10) || 1000) +
 				(ctc > 0 ? ' · ' + _('Ping Catch ≤ %d ms').format(ctc) : '');
-		if (thr > 0) return (short ? _('Ping ≤ %d ms') : _('Blocking servers over %d ms')).format(thr);
+		if (thr > 0) return (short ? (t ? _('Trying: Ping ≤ %d ms') : _('Ping ≤ %d ms'))
+			: (t ? _('Trying: would block servers over %d ms') : _('Blocking servers over %d ms'))).format(thr);
 		return short ? _('Watch only') : _('Watching only, no ping limit');
 	},
 
@@ -785,12 +790,13 @@ return baseclass.extend({
 	// disagreed: the Dashboard's "Servers (+cached)" took the whole list,
 	// cached rows included, and then added the cached count on top.
 	pfCounts: function(j) {
-		var c = { live: 0, cached: 0, allowed: 0, blocked: 0, manual: 0 };
+		var c = { live: 0, cached: 0, allowed: 0, blocked: 0, manual: 0, would: 0 };
 		((j && j.servers) || []).forEach(function(s) {
 			if (s.state === 'cached') { c.cached++; return; }
 			c.live++;
 			if (s.state === 'allowed' || s.state === 'whitelist') c.allowed++;
 			else if (s.state === 'blocked' || s.state === 'blacklist') c.blocked++;
+			else if (s.state === 'would') c.would++;
 			if (s.state === 'whitelist' || s.state === 'blacklist') c.manual++;
 		});
 		return c;
@@ -1951,10 +1957,11 @@ return baseclass.extend({
 		if (p && graded) add(_('Grade'), this.grade(sc) + ' \u00b7 ' + _('score') + ' ' + sc + ' = 100 \u2212 ' + _('ping') + ' ' + r1(p.ping) +
 			' \u2212 ' + _('jitter') + ' ' + r1(p.jitter) + ' \u2212 ' + _('stutter') + ' ' + r1(p.stutter));
 		add(_('Game'), s.gname);
-		x = [ s.state ];
+		x = [ s.state === 'would' ? PF_STATE_TXT.would : s.state ];
 		if (s.connected === true || s.connected === 'true') x.push(s.ip === o.liveIp ? _('playing now') : _('connected now'));
 		if (s.state === 'whitelist' || s.state === 'blacklist') x.push(_('pinned manually'));
 		else if (s.state === 'held') x.push(_('out of the game until its own ping is graded'));
+		else if (s.state === 'would') x.push(_('a mode is being tried: nothing is blocked'));
 		else if ((s.expiry_remaining_sec | 0) > 0)
 			x.push(_('expires in') + ' ' + Math.max(1, Math.round(s.expiry_remaining_sec / 60)) + ' m');
 		add(_('Verdict'), x.join(' \u00b7 '));
@@ -2024,10 +2031,12 @@ return baseclass.extend({
 	// limit), Distance (radius, Ping Catch, Set on Map) and Watch only.
 	// A pick acts at once (pf_action) and keeps the other
 	// mode's number. A number commits on change, 500 ms later, so one edit
-	// is one reload. The cards are disabled while a call runs, then repaint
-	// from a fresh UCI. o.done runs after each change; o.map: on the Map.
-	// node.qxPaint() repaints from UCI (only when it changed). Callers have
-	// uci.load('qos-ex') done.
+	// is one reload. Try first (Ping, Distance) grades as that mode and
+	// blocks nothing until Block now. The cards are disabled while a call
+	// runs, then repaint from a fresh UCI. o.done runs after each change;
+	// o.map: on the Map; o.reply() gives the pf_servers reply the trying box
+	// counts from. node.qxPaint() repaints from UCI (only when it changed).
+	// Callers have uci.load('qos-ex') done.
 	pfModes: function(o) {
 		var self = this, busy = false, sig = null;
 		o = o || {};
@@ -2067,30 +2076,59 @@ return baseclass.extend({
 		}
 		// The card in use shows no line of its own: the line above the cards
 		// (the Dashboard's pfModeText) says what runs. The others say what
-		// a click gives.
-		function card(on, label, sub, pick, ctl) {
+		// a click gives, and Ping and Distance have Try first (tryIt).
+		function card(on, label, sub, pick, ctl, tryIt) {
 			return E('div', { 'class': 'qx-mode' + (on ? ' on' : '') }, [
 				E('button', { 'type': 'button', 'class': 'qx-mode-hd', 'aria-pressed': on ? 'true' : 'false',
 					'disabled': busy ? '' : null, 'click': on ? null : pick }, [ E('b', {}, label), on ? '' : E('span', {}, sub) ]),
+				!on && tryIt ? E('button', { 'type': 'button', 'class': 'btn cbi-button qx-try', 'disabled': busy ? '' : null,
+					'title': _('Grades servers as this mode and blocks nothing'), 'click': tryIt }, _('Try first')) : '',
 				on && ctl ? E('div', { 'class': 'qx-mode-ctl' }, ctl) : '' ]);
+		}
+		// While a mode is tried: what it would block, from o.reply() (servers
+		// a device talks to now named), then Block now and Stop trying.
+		function inUse(r, now) { return r.connected === true || r.connected === 'true' || (now > 0 && now - (r.ts | 0) < 30); }
+		function tryBox() {
+			var j = o.reply ? o.reply() : null, now = (j && j.ts) | 0;
+			var would = ((j && j.servers) || []).filter(function(r) { return r.state === 'would'; });
+			var use = would.filter(function(r) { return inUse(r, now); });
+			var names = use.slice(0, 3).map(function(r) {
+				var p = [ r.city || r.country || '', r.ping > 0 ? r.ping + ' ms' : '' ].filter(String);
+				return r.ip + (p.length ? ' (' + p.join(', ') + ')' : '');
+			}).join('; ') + (use.length > 3 ? '; +' + (use.length - 3) : '');
+			return E('div', { 'class': 'qx-try-box' }, [
+				E('div', {}, [ E('b', {}, _('Trying: nothing is blocked.')), ' ',
+					!j ? '' : would.length ? _('Would block %d servers.').format(would.length) : _('Would block no server so far.') ]),
+				use.length ? E('div', { 'class': 'qos-ex-warn-text' }, _('In use now: %s').format(names)) : '',
+				E('div', { 'class': 'qx-try-btns' }, [
+					E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-action', 'disabled': busy ? '' : null,
+						'title': _('Blocks with this mode now, servers in use too'),
+						'click': function() { act('try', 'now', 0); } }, _('Block now')),
+					E('button', { 'type': 'button', 'class': 'btn cbi-button', 'disabled': busy ? '' : null,
+						'title': _('Back to what ran before the try'),
+						'click': function() { act('try', 'stop', 0); } }, _('Stop trying')) ]) ]);
 		}
 		function paint() {
 			// Not from a config that is being read again: pfUci() would give
 			// the defaults (Watch only).
 			if (self.uciBusy()) return;
-			var c = self.pfUci(), thr = c.threshold, km = c.home_radius_km, ctc = c.ping_catch, base = c.base;
+			var c = self.pfUci(), thr = c.threshold, km = c.home_radius_km, ctc = c.ping_catch, base = c.base, tr = c.trying;
 			var cur = c.block_mode === 'distance' ? 'distance' : thr > 0 ? 'ping' : 'watch';
-			var s = JSON.stringify([ cur, thr, km, ctc, base, busy ]);
+			// While trying the box follows the reply too.
+			var j = tr && o.reply ? o.reply() : null;
+			var ws = j ? (j.servers || []).filter(function(r) { return r.state === 'would'; })
+				.map(function(r) { return r.ip + (inUse(r, j.ts | 0) ? '*' : ''); }) : [];
+			var s = JSON.stringify([ cur, thr, km, ctc, base, busy, tr, ws ]);
 			if (s === sig) return;
 			sig = s;
 			// The preset the limit came from (pfPreset). A pick measures the
-			// base again.
+			// base again; while trying it tries that preset.
 			var pre = self.pfPreset(thr, base);
 			function preset(add, prof, label) {
 				return E('button', { 'type': 'button', 'class': 'btn cbi-button qx-pre' + (pre === add ? ' sel' : ''),
 					'aria-pressed': pre === add ? 'true' : 'false', 'disabled': busy ? '' : null,
 					'title': _('Measures your base ping, then sets the limit'),
-					'click': function() { act('profile', prof, 0); } },
+					'click': function() { act(tr ? 'try' : 'profile', prof, 0); } },
 					[ E('b', {}, label), E('span', {}, _('base ping + %d ms').format(add)) ]);
 			}
 			dom.content(box, [
@@ -2102,12 +2140,16 @@ return baseclass.extend({
 						pre === 40 ? E('div', { 'class': 'qos-ex-warn-text qx-pre-note' },
 							_('Tight: games with few servers this close may find no match. If matchmaking fails, pick Casual.')) : '',
 						pre && !(base > 0) ? E('div', { 'class': 'qos-ex-muted qx-pre-note' },
-							_('Base ping not measured: pick again to measure it.')) : '' ]),
+							_('Base ping not measured: pick again to measure it.')) : '',
+						tr ? tryBox() : '' ],
+					function() { act('try', thr > 0 ? 'ping' : 'casual', 0); }),
 				card(cur === 'distance', _('Distance'), _('Block servers outside %d km').format(km) +
 						(ctc > 0 ? ' · ' + _('Ping Catch ≤ %d ms').format(ctc) : ''),
 					function() { act('mode', 'distance', 0); },
 					[ num('home_radius_km', 50, 20000, 'km', _('Radius'), 'radius'), num('ping_catch', 0, 250, 'ms', _('Ping Catch'), 'catch'),
-						o.map ? '' : self.go([ 'pingfilter', 'map' ], _('Set on Map')) ]),
+						o.map ? '' : self.go([ 'pingfilter', 'map' ], _('Set on Map')),
+						tr ? tryBox() : '' ],
+					function() { act('try', 'distance', 0); }),
 				card(cur === 'watch', _('Watch only'), _('Find and grade servers, no ping limit'),
 					function() { act('profile', 'observe', 0); }, null)
 			]);
@@ -2308,7 +2350,8 @@ return baseclass.extend({
 			var playing = (r.ip === o.playIp), home = o.home;
 			var badge = E('span', { 'class': 'label pf-badge ' + r.state,
 				'title': r.state === 'cached' ? _('Known from the cache but not enforced now')
-					: r.state === 'held' ? _('Out of the game until its own ping is graded') : '' }, [ PF_STATE_TXT[r.state] || r.state ]);
+					: r.state === 'held' ? _('Out of the game until its own ping is graded')
+					: r.state === 'would' ? _('Not blocked: a mode is being tried') : '' }, [ PF_STATE_TXT[r.state] || r.state ]);
 			// Distance from home, km (-1 = home or the server not located).
 			var km = (home && parseFloat(r.lat) && parseFloat(r.lon))
 				? self.haversineKm(home[0], home[1], parseFloat(r.lat), parseFloat(r.lon)) : -1;
