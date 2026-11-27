@@ -6,7 +6,7 @@
 # fast path (@pf_seen discovery, @ping_allowed / @ping_blocked enforcement).
 # Installed to $PF_BIN; the shaper delegates its `pingfilter` verb here.
 
-VERSION="2.1.0.7"
+VERSION="2.1.0.8"
 # Version: <module>.<major>.<minor>.<patch>; module 3 = shaper, 2 = Ping
 # Filter, 1 = LuCI app. Odometer: patch 10 -> minor+1, minor 10 -> major+1.
 SCRIPT_NAME="qos-ex-pf"
@@ -412,6 +412,10 @@ pf_load_config() {
 	# reader inherits.
 	_pf_num PF_PING_CATCH       ping_catch_ms      0   0   250
 	if [ "$PF_BLOCK_MODE" = "distance" ]; then PF_THRESHOLD_MS=0; else PF_PING_CATCH=0; fi
+	# Try first (pingfilter.trying 1, pf_try): the mode is graded as usual,
+	# but nothing it decides is blocked; only Always block still blocks.
+	config_get PF_TRYING           pingfilter trying           "0"
+	[ "$PF_TRYING" = 1 ] || PF_TRYING=0
 	# Limit margin: a reading passes at <= ms + ms*pct/100. 0 = hard limit.
 	_pf_num PF_PING_VAR_PCT     ping_var_pct       5   0    50
 	config_get PF_HOME_LAT        pingfilter home_lat         ""
@@ -1623,9 +1627,11 @@ _pf_port_match() {
 #          until graded: a ping limit, or distance + Ping Catch. A flow a
 #          server opens is not held (it cannot be timed). first_pkts 0 = no
 #          hold (a new server is allowed until graded);
-#   none   watch only (ping limit 0) without a country list.
+#   none   watch only (ping limit 0) without a country list, and while a
+#          mode is tried (Try first): nothing is held.
 _pf_hold_on() {
 	_HOLD=""
+	[ "${PF_TRYING:-0}" = 1 ] && return 1
 	if { [ "${PF_BLOCK_MODE:-ping}" = "distance" ] && ! [ "${PF_PING_CATCH:-0}" -gt 0 ] 2>/dev/null; } \
 	   || [ -n "$PF_COUNTRIES" ]; then
 		_HOLD=full
@@ -1951,7 +1957,8 @@ pf_apply_sets_atomic() {
 # Both verdict sets empty while graded rows exist (table rebuilt behind our
 # back, or every entry timed out over a long idle): re-grade the cache. An
 # allow with no figure yet is in neither set by design (the hold), and with
-# Ping Catch under the first hold one with no ping of its own (_pf_wait).
+# Ping Catch under the first hold one with no ping of its own (_pf_wait);
+# while a mode is tried, what it would block.
 pf_sets_self_heal() {
 	[ -s "$PF_SERVERS_TSV" ] || return 0
 	local a b m=0 _HOLD
@@ -1959,7 +1966,7 @@ pf_sets_self_heal() {
 	b=$(pf_block_ips 2>/dev/null | head -1)
 	{ [ -n "$a" ] || [ -n "$b" ]; } && return 0
 	_pf_catch_on && _pf_hold_on && [ "$_HOLD" = first ] && m=1
-	awk -F'\t' -v m="$m" '($2=="allowed"&&$3+0>0&&(!m||$4=="icmp"||$4=="real"))||$2=="blocked"||$2=="whitelist"||$2=="blacklist"{f=1;exit} END{exit f?0:1}' \
+	awk -F'\t' -v m="$m" -v t="${PF_TRYING:-0}" '($2=="allowed"&&$3+0>0&&(!m||$4=="icmp"||$4=="real"))||($2=="blocked"&&t!=1)||$2=="whitelist"||$2=="blacklist"{f=1;exit} END{exit f?0:1}' \
 		"$PF_SERVERS_TSV" 2>/dev/null || return 0
 	msg "ping filter: enforcement sets empty with cached rows present — rebuilding atomically"
 	pf_reclassify
@@ -2016,7 +2023,7 @@ pf_verify_install() {
 			printf "  %-32s %s\n" "Chain $s:" "NO"; ok=0
 		fi
 	done
-	printf "  %-32s %s\n" "Hold rule:" "$(nft list chain $PF_FW_TABLE enforce 2>/dev/null | grep -q pf-hold && echo "on" || echo "off (watch only, or first_pkts 0)")"
+	printf "  %-32s %s\n" "Hold rule:" "$(nft list chain $PF_FW_TABLE enforce 2>/dev/null | grep -q pf-hold && echo "on" || echo "off (watch only, a mode being tried, or first_pkts 0)")"
 	printf "  %-32s %s\n" "conntrack tool:" "$([ $ct_ok = 1 ] && echo "YES (cuts live flows on block)" || echo "NO — $(pkg_install_hint conntrack)")"
 	_pf_offload_on && { printf "  %-32s %s\n" "Flow offloading:" "ON — established game flows bypass the Ping Filter; turn it off"; ok=0; }
 	if [ "$ok" = 0 ]; then
@@ -4247,7 +4254,8 @@ _pf_decide() {
 	_VW=0
 	case "$2" in whitelist|blacklist) _V=$2; return 0 ;; esac
 	_pf_classify "$3" "$5" "$6" "$4" "$1" "$7" "$8"; _V=$_CL; _VW=$_CLW
-	[ "$_V" = blocked ] && [ "$9" = 1 ] && [ "${PF_USER_NOW:-0}" != 1 ] || return 0
+	# While a mode is tried nothing is blocked: the verdict shows as it is.
+	[ "$_V" = blocked ] && [ "$9" = 1 ] && [ "${PF_USER_NOW:-0}" != 1 ] && [ "${PF_TRYING:-0}" != 1 ] || return 0
 	if [ -z "$2" ]; then
 		_pf_catch_on && return 0
 		_pf_in_session "$1" || return 0
@@ -4315,7 +4323,9 @@ _pf_put() {
 		             _pf_put_due "$1" h && { pf_allow_del "$1"; _pf_put_mark "$1" h; }
 		         elif _pf_src_measured "$3"; then _pf_put_due "$1" a2 && pf_allow_add "$1" 2
 		         else _pf_put_due "$1" a0 && pf_allow_add "$1"; fi ;;
-		blocked) _pf_put_due "$1" b0 && pf_block_add "$1" ;;
+		# Try first: what the mode would block stays in neither set.
+		blocked) if [ "${PF_TRYING:-0}" = 1 ]; then _pf_put_due "$1" w && { pf_block_del "$1"; _pf_put_mark "$1" w; }
+		         else _pf_put_due "$1" b0 && pf_block_add "$1"; fi ;;
 	esac
 	return 0
 }
@@ -4410,7 +4420,7 @@ _pf_auto_nets() {
 		_pf_lim
 		# "o:a.b.c.0/24 b:d.e.f.0/24 ...", sorted: the same /24s always read
 		# the same, whatever order the rows are in.
-		new=$(awk -F'\t' -v m="$PF_AUTO_PIN" -v cl="|$PF_COUNTRIES|" -v lim="$_LIM" '
+		new=$(awk -F'\t' -v m="$PF_AUTO_PIN" -v cl="|$PF_COUNTRIES|" -v lim="$_LIM" -v t="${PF_TRYING:-0}" '
 			($2 == "allowed" || $2 == "blocked") && ($4 == "icmp" || $4 == "real") && $3 + 0 > 0 \
 			    && $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {
 				p = $1; sub(/\.[0-9]+$/, "", p)
@@ -4420,7 +4430,8 @@ _pf_auto_nets() {
 			}
 			END {
 				for (p in U) if (!(p in O) || U[p] > O[p]) print "o:" p ".0/24"
-				for (p in O) if (O[p] >= m && !(p in U)) print "b:" p ".0/24"
+				# While a mode is tried no /24 is blocked (nothing is).
+				if (t != 1) for (p in O) if (O[p] >= m && !(p in U)) print "b:" p ".0/24"
 			}' "$PF_SERVERS_TSV" 2>/dev/null | sort | tr '\n' ' ')
 		new=${new% }
 	fi
@@ -4906,14 +4917,15 @@ pf_reclassify_locked() {
 				new_state=$_V
 			fi
 		}
-		# An allow that waits under the hold (_pf_wait): in neither set.
+		# An allow that waits under the hold (_pf_wait), and while a mode is
+		# tried what it would block: in neither set.
 		case "$new_state" in
 			whitelist) printf '%s\t1\n' "$ip" >> "$want_allow" ;;
 			blacklist) printf '%s\t1\n' "$ip" >> "$want_block" ;;
 			allowed)   if _pf_wait "$ip" "$ping"; then :
 			           elif _pf_src_measured "$src"; then printf '%s\t2\n' "$ip" >> "$want_allow"
 			           else printf '%s\t0\n' "$ip" >> "$want_allow"; fi ;;
-			blocked)   printf '%s\t0\n' "$ip" >> "$want_block" ;;
+			blocked)   [ "${PF_TRYING:-0}" = 1 ] || printf '%s\t0\n' "$ip" >> "$want_block" ;;
 		esac
 		printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 			"$ip" "$new_state" "$ping" "$src" \
@@ -5881,9 +5893,12 @@ pf_set_mode() {
 		ping|distance) ;;
 		*) err "usage: pf mode <ping|distance>"; return 1 ;;
 	esac
-	[ "$(uci -q get $UCI_CFG.pingfilter.block_mode)" = "$mode" ] && { pf_reload; return 0; }
-	uci set $UCI_CFG.pingfilter.block_mode="$mode"
-	uci commit $UCI_CFG
+	# A pick of a mode ends a try (Try first), unless pf_try is the caller.
+	# Flash wear: a commit only when something changed.
+	local c=0
+	_pf_try_drop && c=1
+	[ "$(uci -q get $UCI_CFG.pingfilter.block_mode)" = "$mode" ] || { uci set $UCI_CFG.pingfilter.block_mode="$mode"; c=1; }
+	[ "$c" = 1 ] && uci commit $UCI_CFG
 	pf_reload
 }
 
@@ -6237,7 +6252,8 @@ pf_mark_state() {
 		blocked)
 			pf_uci_list_del whitelist "$ip"
 			pf_uci_list_del blacklist "$ip"
-			pf_block_add "$ip"
+			# While a mode is tried only Always block blocks: the mark is shown.
+			if [ "${PF_TRYING:-0}" = 1 ]; then pf_block_del "$ip"; else pf_block_add "$ip"; fi
 			pf_cache_upsert "$ip" "blocked" "$ping" "$ping_src" \
 				"$lat" "$lon" "$country" "$city" "$lan_src"
 			;;
@@ -6389,6 +6405,7 @@ pf_status() {
 	echo "area_min=${PF_AREA_MIN:-0}"
 	echo "match_end_wait=${PF_MATCH_END_WAIT:-30}"
 	echo "hold_active=$(_pf_hold_on && echo 1 || echo 0)"
+	echo "trying=${PF_TRYING:-0}"
 	echo "ping_catch_ms=${PF_PING_CATCH:-0}"
 	echo "lite=${PF_LITE:-0}"
 	echo "ping_var_pct=${PF_PING_VAR_PCT:-5}"
@@ -6448,6 +6465,7 @@ pf_status() {
 	echo "  Allowed set:    $([ "$st_aset" = 1 ] && echo "loaded ($aset_n IPs)" || echo "not loaded")"
 	echo "  Ping Target:    ${PF_THRESHOLD_MS} ms"
 	echo "  Block mode:     ${PF_BLOCK_MODE:-ping}"
+	[ "${PF_TRYING:-0}" = 1 ] && echo "  Trying:         yes - graded as above, nothing blocked but Always block (pingfilter try now | try stop)"
 	if [ "${PF_PING_CATCH:-0}" -gt 0 ] 2>/dev/null; then
 		local _w _ao="" _ab=""
 		for _w in $_a24; do
@@ -6558,10 +6576,10 @@ pf_servers_json() {
 	} > "$canon_tmp"
 
 	if [ ! -s "$canon_tmp" ]; then
-		printf '{"servers":[],"ts":%s,"threshold":%s,"enabled":%s,"master_enabled":%s,"activity":"%s","home_lat":%s,"home_lon":%s,"home_radius_km":%s,"block_mode":"%s","active_pps":%s,"ping_catch":%s,"ping_var_pct":%s,"whitelist_ips":"%s","blacklist_ips":"%s","play_start":%s,"map_keep":%s,"stuck":%s,"countries":"%s","geo_down":%s,"hs_quiet":%s,"hs_bad":%s}\n' \
+		printf '{"servers":[],"ts":%s,"threshold":%s,"enabled":%s,"master_enabled":%s,"activity":"%s","home_lat":%s,"home_lon":%s,"home_radius_km":%s,"block_mode":"%s","active_pps":%s,"ping_catch":%s,"ping_var_pct":%s,"whitelist_ips":"%s","blacklist_ips":"%s","play_start":%s,"map_keep":%s,"stuck":%s,"countries":"%s","geo_down":%s,"hs_quiet":%s,"hs_bad":%s,"trying":%s}\n' \
 			"$now" "${PF_THRESHOLD_MS:-50}" "${PF_ENABLED:-0}" "${ENABLED:-0}" "$activity" \
 			"$hlat_q" "$hlon_q" "$hr_q" "$bm_q" "${PF_ACTIVE_PPS:-20}" "${PF_PING_CATCH:-0}" "${PF_PING_VAR_PCT:-5}" "$wl" "$bl" "$ps" "${PF_MAP_KEEP:-3600}" \
-			"$stuck" "$(printf '%s' "$PF_COUNTRIES" | sed 's/[\\"]//g')" "$geod" "$hsq" "$hsb"
+			"$stuck" "$(printf '%s' "$PF_COUNTRIES" | sed 's/[\\"]//g')" "$geod" "$hsq" "$hsb" "${PF_TRYING:-0}"
 		rm -f "$canon_tmp" 2>/dev/null
 		return
 	fi
@@ -6582,7 +6600,7 @@ pf_servers_json() {
 	    -v live_file="$PF_LIVE_TSV" \
 	    -v hist_file="$PF_TELE_HIST" -v owner_file="$PF_OWNER_TSV" -v pfx_file="$PF_PREFIX_TSV" \
 	    -v pfx_ttl="${PF_PREFIX_TTL:-0}" -v pstart="$ps" -v mkeep="${PF_MAP_KEEP:-3600}" -v jmax="${PF_JSON_MAX:-800}" \
-	    -v hold="$hold" -v a24="$a24" '
+	    -v hold="$hold" -v a24="$a24" -v trying="${PF_TRYING:-0}" '
 	# Escapes by concatenation, never a gsub replacement string (BusyBox
 	# 1.38 awk drops the backslash of "\\\"" there -> invalid JSON).
 	function jesc(s,    o, i, c) {
@@ -6711,6 +6729,9 @@ pf_servers_json() {
 				if (!(p24 in OK24)) state = "held"
 			}
 		}
+		# Try first: what the mode would block is in neither set, seen now or
+		# not: "would", never "blocked" (nothing is).
+		if (trying == "1" && tag == "T" && tsv_state == "blocked") { state = "would"; is_cached = "false" }
 
 		# 2.0.4.2: a measured allow stays in the kernel for row_ttl; one not
 		# seen within set_timeout still reads "cached" (counts, re-add).
@@ -6770,8 +6791,8 @@ pf_servers_json() {
 			h_sess, h_jit, h_jmax, h_loss, h_pps, h_dur, h_gaps, bkm, gsus, jesc(GN[ip])
 	}
 	END {
-		printf "],\"ts\":%s,\"threshold\":%s,\"enabled\":%s,\"master_enabled\":%s,\"activity\":\"%s\",\"home_lat\":%s,\"home_lon\":%s,\"home_radius_km\":%s,\"block_mode\":\"%s\",\"active_pps\":%s,\"ping_catch\":%s,\"ping_var_pct\":%s,\"whitelist_ips\":\"%s\",\"blacklist_ips\":\"%s\",\"play_start\":%s,\"map_keep\":%s,\"stuck\":%d,\"countries\":\"%s\",\"geo_down\":%d,\"hs_quiet\":%d,\"hs_bad\":%d}\n", \
-			now, thr, en, men, act, hlat, hlon, hr, jesc(bm), apps_cfg, pcatch + 0, pvar + 0, jesc(wl), jesc(bl), pstart + 0, mkeep + 0, stuck + 0, jesc(ENVIRON["PF_J_CO"]), geod + 0, hsq + 0, hsb + 0
+		printf "],\"ts\":%s,\"threshold\":%s,\"enabled\":%s,\"master_enabled\":%s,\"activity\":\"%s\",\"home_lat\":%s,\"home_lon\":%s,\"home_radius_km\":%s,\"block_mode\":\"%s\",\"active_pps\":%s,\"ping_catch\":%s,\"ping_var_pct\":%s,\"whitelist_ips\":\"%s\",\"blacklist_ips\":\"%s\",\"play_start\":%s,\"map_keep\":%s,\"stuck\":%d,\"countries\":\"%s\",\"geo_down\":%d,\"hs_quiet\":%d,\"hs_bad\":%d,\"trying\":%d}\n", \
+			now, thr, en, men, act, hlat, hlon, hr, jesc(bm), apps_cfg, pcatch + 0, pvar + 0, jesc(wl), jesc(bl), pstart + 0, mkeep + 0, stuck + 0, jesc(ENVIRON["PF_J_CO"]), geod + 0, hsq + 0, hsb + 0, trying + 0
 	}
 	' "$canon_tmp" 2>/dev/null
 
@@ -6817,12 +6838,15 @@ pf_profile() {
 		[ "$thr" -le 5000 ] || thr=5000
 		lim=": $thr ms (base ping ${base:-not measured}${base:+ ms + $add})"
 	fi
+	# A pick of a mode ends a try (Try first), unless pf_try is the caller.
+	_pf_try_drop
 	uci set "$UCI_CFG.pingfilter.block_mode=$mode"
 	[ -n "$thr" ] && uci set "$UCI_CFG.pingfilter.threshold_ms=$thr"
 	if [ -n "$base" ]; then uci set "$UCI_CFG.pingfilter.base_ms=$base"
 	elif [ "$add" -gt 0 ]; then uci -q delete "$UCI_CFG.pingfilter.base_ms"; fi
 	uci commit "$UCI_CFG"
 	pf_load_config
+	[ "${PF_TRYING:-0}" = 1 ] && lim="$lim, tried: nothing is blocked"
 	# Limit changed without a reload: the hold rule follows.
 	pf_table_present && pf_table_install >/dev/null 2>&1
 	# The re-grade's phase 2 re-pings every cached server (10-60 s of ICMP):
@@ -6838,6 +6862,78 @@ pf_profile() {
 		# open in the child, and the rpcd pipe would not close.
 		( _pf_title pf-reclassify; exec </dev/null >/dev/null 2>&1; pf_reclassify_now ) &
 	fi
+}
+
+# Try first (the Ping and Distance cards): a mode is graded as usual, but
+# nothing it decides is blocked: no new-server hold, its blocks and Ping
+# Catch /24s stay out of the kernel, no flow is cut. Only the Always block
+# list blocks. The servers JSON reads "would" where it would block.
+#   try casual|competitive|ping|distance   try that mode (ping: its own limit)
+#   try now    block with the mode tried (the try ends)
+#   try stop   back to what ran before the first try (pingfilter.try_back
+#              = "mode limit base", "-" for an option that was not set)
+# A pick of a mode (profile, mode) ends a try; a number (limit, radius, Ping
+# Catch) keeps it.
+_PF_TRY_SET=0
+# _pf_try_drop: stage the end of a try; 0 = there was one. pf_try sets
+# _PF_TRY_SET while it picks the mode it tries.
+_pf_try_drop() {
+	[ "$_PF_TRY_SET" = 1 ] && return 1
+	[ -n "$(uci -q get "$UCI_CFG.pingfilter.trying")$(uci -q get "$UCI_CFG.pingfilter.try_back")" ] || return 1
+	uci -q delete "$UCI_CFG.pingfilter.trying"
+	uci -q delete "$UCI_CFG.pingfilter.try_back"
+	return 0
+}
+pf_try() {
+	local what="$1" PF_USER_NOW=1 m t b
+	case "$what" in
+		casual|competitive|ping|distance)
+			if [ "$what" = ping ] && ! [ "$(uci -q get "$UCI_CFG.pingfilter.threshold_ms")" -gt 0 ] 2>/dev/null; then
+				err "no ping limit of its own to try: try casual or competitive"
+				return 1
+			fi
+			# The first try keeps what ran before it, for try stop.
+			if [ "$(uci -q get "$UCI_CFG.pingfilter.trying")" != 1 ]; then
+				m=$(uci -q get "$UCI_CFG.pingfilter.block_mode")
+				t=$(uci -q get "$UCI_CFG.pingfilter.threshold_ms")
+				b=$(uci -q get "$UCI_CFG.pingfilter.base_ms")
+				uci set "$UCI_CFG.pingfilter.try_back=${m:--} ${t:--} ${b:--}"
+			fi
+			uci set "$UCI_CFG.pingfilter.trying=1"
+			uci commit "$UCI_CFG"
+			_PF_TRY_SET=1
+			case "$what" in
+				casual|competitive) pf_profile "$what" ;;
+				*) msg "ping filter: trying block_mode=$what - nothing it decides is blocked"; pf_set_mode "$what" ;;
+			esac
+			_PF_TRY_SET=0
+			return 0
+			;;
+		now|stop) ;;
+		*) err "usage: pf try <casual|competitive|ping|distance|now|stop>"; return 1 ;;
+	esac
+	b=$(uci -q get "$UCI_CFG.pingfilter.try_back")
+	if [ "$(uci -q get "$UCI_CFG.pingfilter.trying")" != 1 ] && [ -z "$b" ]; then
+		msg "ping filter: no mode is being tried"
+		return 0
+	fi
+	if [ "$what" = stop ] && [ -n "$b" ]; then
+		# shellcheck disable=SC2086 # "mode limit base", split on purpose
+		set -- $b
+		case "$1" in ping|distance) uci set "$UCI_CFG.pingfilter.block_mode=$1" ;; -) uci -q delete "$UCI_CFG.pingfilter.block_mode" ;; esac
+		case "$2" in -) uci -q delete "$UCI_CFG.pingfilter.threshold_ms" ;; ''|*[!0-9]*) ;; *) uci set "$UCI_CFG.pingfilter.threshold_ms=$2" ;; esac
+		case "$3" in -) uci -q delete "$UCI_CFG.pingfilter.base_ms" ;; ''|*[!0-9]*) ;; *) uci set "$UCI_CFG.pingfilter.base_ms=$3" ;; esac
+	fi
+	uci -q delete "$UCI_CFG.pingfilter.trying"
+	uci -q delete "$UCI_CFG.pingfilter.try_back"
+	uci commit "$UCI_CFG"
+	pf_load_config
+	if [ "$what" = now ]; then
+		msg "ping filter: try ended - blocking now (block_mode=${PF_BLOCK_MODE:-ping} threshold=${PF_THRESHOLD_MS:-0}ms catch=${PF_PING_CATCH:-0}ms)"
+	else
+		msg "ping filter: try stopped - back to block_mode=${PF_BLOCK_MODE:-ping} threshold=${PF_THRESHOLD_MS:-0}ms"
+	fi
+	pf_reload
 }
 
 pf_connected_ip() {
@@ -7035,6 +7131,7 @@ pf_dispatch() {
 		session_reset) pf_session_reset ;;
 		reclassify) pf_reclassify_now ;;
 		profile)   pf_profile "$2" ;;
+		try)       pf_try "$2" ;;
 		sessions)  pf_sessions_json ;;
 		geo_check) pf_geo_check "$2" ;;
 		refresh_lists) pf_refresh_lists ;;
@@ -7076,6 +7173,9 @@ Usage: $0 {start|stop|restart|reload|status|servers|scan}
        $0 profile <competitive|casual|distance|observe>
                                   # competitive / casual: base ping + 40 / + 80 ms
        $0 profile                 # show the current profile
+       $0 try <casual|competitive|ping|distance>
+                                  # Try first: graded as that mode, nothing blocked
+       $0 try {now|stop}          # block with the mode tried / back to what ran before
        $0 {whitelist|blacklist} <IPv4 | a.b.c.d/len>
        $0 forget <ip | a.b.c.d/len>
        $0 mark <IPv4> <allowed|blocked|whitelist|blacklist>
