@@ -258,7 +258,9 @@ return view.extend({
 			tile(_('Servers (+cached)'), cnt.live + (cnt.cached ? ' +' + cnt.cached : ''), [ 'servers' ], _('Servers')),
 			tile(_('Always allow / block'), String(cnt.manual), [ 'servers' ], _('Servers')),
 			tile(_('Watched devices'), devCell, [ 'settings', '#devices' ], _('Settings')),
-			tile(_('Allowed / blocked'), cnt.allowed + ' / ' + cnt.blocked, [ 'map' ], _('Map'))
+			// While a mode is tried nothing it decides is blocked: what it would.
+			(j.trying | 0) ? tile(_('Allowed / would block'), cnt.allowed + ' / ' + cnt.would, [ 'servers' ], _('Servers'))
+				: tile(_('Allowed / blocked'), cnt.allowed + ' / ' + cnt.blocked, [ 'map' ], _('Map'))
 		]);
 
 		// Already sorted by score, so the first graded row is the best
@@ -590,7 +592,7 @@ return view.extend({
 			} });
 		// Kept across paints too: the mode cards (a change refreshes the
 		// page), the in-match warning and the setup card shown while off.
-		view.modes = h.pfModes({ done: function() { return view.refresh(); } });
+		view.modes = h.pfModes({ done: function() { return view.refresh(); }, reply: function() { return view.payload; } });
 		view.warn = h.pfMatchWarn();
 		view.setupO = { macMap: view.macMap };
 		view.setup = h.pfSetup(view.setupO);

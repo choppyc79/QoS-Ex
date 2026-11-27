@@ -26,14 +26,16 @@ function asKv(out) {
 	return o;
 }
 // suggest: "set|key|current|suggested|why", "keep|key|current|why" (the queue
-// and rule set when they stay) and "note|text" lines.
+// and rule set when they stay), "note|text" and "pfonly|text" (the Ping
+// Filter only, offered instead) lines.
 function asSuggestions(out) {
-	var r = { set: [], keep: [], note: [] };
+	var r = { set: [], keep: [], note: [], pfonly: '' };
 	String(out || '').split(/\n/).forEach(function(l) {
 		var f = l.split('|');
 		if (f[0] === 'set' && f.length >= 5) r.set.push({ key: f[1], cur: f[2], val: f[3], why: f.slice(4).join('|') });
 		else if (f[0] === 'keep' && f.length >= 4) r.keep.push({ key: f[1], cur: f[2], val: f[2], why: f.slice(3).join('|'), keep: true });
 		else if (f[0] === 'note' && f[1]) r.note.push(f.slice(1).join('|'));
+		else if (f[0] === 'pfonly' && f[1]) r.pfonly = f.slice(1).join('|');
 	});
 	return r;
 }
@@ -153,7 +155,10 @@ return view.extend({
 		// with the speed test for the router's CPU.
 		var head = h.pageHead(_('Auto Setup'), 'none', { fed: true });
 		h.barFeed(loaded[1]);
-		view.running = h.running(h.parseState((loaded[1] && loaded[1].output) || '').state);
+		var st0 = h.parseState((loaded[1] && loaded[1].output) || '').state;
+		// Running either way: shaping, or the Ping Filter only.
+		view.running = h.running(st0) || st0.pf_only === '1';
+		view.pfm = false;
 		view.res = asKv(loaded[2] && loaded[2].output);
 		view.pr = {};
 		view.sg = null;
@@ -183,6 +188,9 @@ return view.extend({
 				choice(' qx-as-rec', _('Auto Setup'), _('Tests the line and suggests every setting for this router.'), function() {
 					view.open();
 					return view.runTest(true);
+				}),
+				choice('', _('Ping Filter only'), _('No shaping: only filters game servers by ping or distance.'), function() {
+					return view.pfOnly();
 				}),
 				choice('', mTitle, view.again ? _('Change nothing and close Auto Setup.')
 					: _('Start from the defaults; set the line and devices on Setup.'), view.manual),
@@ -291,6 +299,34 @@ return view.extend({
 		this.paintSteps();
 	},
 
+	// The Ping Filter only (both rates 0): no speed test and no devices, the
+	// settings step at once (suggest 0 0: the rates, the Ping Filter's sizing
+	// for this router), then the Ping Filter's own setup card (devices, mode,
+	// home). Auto Setup itself never turns the Ping Filter on.
+	pfOnly: function() {
+		this.pfm = true;
+		this.typed = { d: 0, u: 0 };
+		dom.content(this.lineErr, []);
+		dom.content(this.sgBox, E('p', { 'class': 'qos-ex-muted' }, _('Working out the settings…')));
+		this.open();
+		return this.refresh();
+	},
+	// Back from the Ping Filter only: to the steps of a fresh speed test (as
+	// the page opens on one), else to the choices.
+	pfBack: function() {
+		this.pfm = false;
+		this.typed = null;
+		this.reached = 0;
+		dom.content(this.sgBox, E('p', { 'class': 'qos-ex-muted' }, _('Working out the settings…')));
+		this.paintLine();
+		if (fresh(this.res)) {
+			this.open();
+			return this.refresh();
+		}
+		this.steps.style.display = 'none';
+		this.intro.style.display = '';
+	},
+
 	// One step at a time: the devices show once the line speed is known (a
 	// fresh test, or speeds typed in), the settings once the devices are
 	// done (Next). A step once shown stays, so an earlier one can still be
@@ -298,6 +334,16 @@ return view.extend({
 	// numbers: done green (✓), the one to do now in the accent.
 	paintSteps: function(scroll) {
 		var view = this, was = view.reached || 0;
+		// The Ping Filter only: the settings step alone, numbered 1.
+		if (view.pfm) {
+			view.s1.style.display = view.s2.style.display = 'none';
+			view.s3.style.display = '';
+			view.s3.classList.add('cur');
+			view.s3.qxNum.className = 'qx-as-n cur';
+			h.setText(view.s3.qxNum, '1');
+			view.nextBar.style.display = 'none';
+			return;
+		}
 		var done = [ fresh(view.res) || !!view.typed, !!view.devNext, false ];
 		view.reached = Math.max(was, done[0] ? (done[1] ? 2 : 1) : 0);
 		var cards = [ view.s1, view.s2, view.s3 ], cur = done.indexOf(false);
@@ -484,10 +530,12 @@ return view.extend({
 
 	useTyped: function() {
 		var d = parseFloat(this.inDn.value), u = parseFloat(this.inUp.value);
-		if (!(d >= 0) || !(u >= 0) || (d === 0 && u === 0)) {
+		if (!(d >= 0) || !(u >= 0)) {
 			h.notifyErr(_('Type the download and upload speed in Mbit (0 = not shaped)'));
 			return;
 		}
+		// Both 0, as on Setup: the Ping Filter only.
+		if (d === 0 && u === 0) return this.pfOnly();
 		this.typed = { d: Math.round(d * 1000), u: Math.round(u * 1000) };
 		dom.content(this.lineErr, []);
 		this.paintLine();
@@ -525,7 +573,8 @@ return view.extend({
 	// one for an empty list. None until the device list is up.
 	extra: function() {
 		var p = this.pick;
-		if (!p) return '';
+		// The Ping Filter only shows no devices step: nothing is sent.
+		if (!p || this.pfm) return '';
 		var g = [], l = [];
 		Object.keys(p).forEach(function(m) {
 			if (p[m] === 'gaming') g.push('dev=' + m);
@@ -545,7 +594,7 @@ return view.extend({
 				return h.callAutosetupRun('apply', keys + (view.sgAt ? ' at=' + view.sgAt : '')).then(function(r) {
 					if (!(r && r.ok)) throw new Error((r && r.error) || 'rc=' + ((r && r.rc) || '?'));
 				});
-			} ] ].concat(setup ? [ [ _('Starting the shaper'), 95, function() {
+			} ] ].concat(setup ? [ [ view.pfm ? _('Starting QoS-Ex') : _('Starting the shaper'), 95, function() {
 				var on = uci.get('qos-ex', 'settings', 'enabled') === '1';
 				return (on ? Promise.resolve({ ok: true }) : h.callAction('enable')).then(function(e) {
 					if (!(e && e.ok)) throw new Error(_('could not start — check the WAN and speeds on Setup'));
@@ -607,6 +656,11 @@ return view.extend({
 			view.btnSteer ]));
 		if (sg.note.length)
 			kids.push(E('ul', { 'class': 'qos-ex-muted qx-as-notes' }, sg.note.map(function(n) { return E('li', {}, [ n ]); })));
+		// The speed test found the Ping Filter only may be all this line needs.
+		if (sg.pfonly && !view.pfm)
+			kids.push(E('div', { 'class': 'qx-as-steer' }, [ E('span', {}, [ sg.pfonly ]),
+				E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(view, function() { return view.pfOnly(); }) },
+					_('Use Ping Filter only')) ]));
 		// Nothing to change still completes the setup (and turns the shaper on).
 		var label = main.length ? (view.running ? _('Apply') : _('Apply and start'))
 			: (view.running ? _('Finish') : _('Finish and start'));
@@ -614,11 +668,15 @@ return view.extend({
 		view.btnApply = E('button', { 'class': 'btn cbi-button cbi-button-apply', 'click': ui.createHandlerFn(view, function() {
 			var keys = boxes.filter(function(b) { return b.checked; }).map(function(b) { return b.qosExKey; });
 			var x = view.extra();
+			// The Ping Filter only goes on to the Ping Filter's own setup card.
+			var pf = view.pfm;
 			return view.act((keys.length ? keys.join(' ') : 'none') + (x ? ' ' + x : ''), _('Auto Setup'),
-				function() { h.menuGo([ 'overview' ]); });
+				function() { h.menuGo(pf ? [ 'pingfilter', 'dashboard' ] : [ 'overview' ]); });
 		}) }, label);
 		kids.push(E('div', { 'class': 'qx-as-apply' }, [ view.btnApply,
-			E('span', { 'class': 'qx-sub' }, _('Undo it any time: System → Maintenance.')) ]), view.applyErr);
+			E('span', { 'class': 'qx-sub' }, _('Undo it any time: System → Maintenance.')),
+			view.pfm ? E('a', { 'href': '#', 'click': function(ev) { ev.preventDefault(); view.pfBack(); } }, _('Back')) : '' ]),
+			view.applyErr);
 		// Drawn while a test runs (the page was reloaded): not until it ends.
 		[ view.btnApply, view.btnSteer ].forEach(function(b) { if (b) b.disabled = !!view.following; });
 		dom.content(view.sgBox, kids);

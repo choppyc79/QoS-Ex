@@ -82,6 +82,9 @@ on the **Set up QoS-Ex** card. Pick one:
 
 - **Auto Setup** (recommended) — checks the router, measures the line and
   suggests every setting.
+- **Ping Filter only** — no shaping: for a line that keeps its ping under
+  load, or a router too slow to shape it. It sets both rates to 0, sizes the
+  Ping Filter for the router and opens its setup ([PINGFILTER.md](PINGFILTER.md)).
 - **Manual setup** — keeps the defaults (CAKE queue, Adaptive rules) and
   opens **Setup → Line**.
 - **Restore a settings file** — a `QoS-Ex Settings.cfg` saved earlier from
@@ -109,7 +112,10 @@ on the **Set up QoS-Ex** card. Pick one:
 3. **③ Settings to apply** lists each suggested change with its reason.
    Untick any you do not want, then press **Apply and start** (**Finish and
    start** when nothing needs to change). The settings are saved, the shaper
-   starts, and you land on the Overview.
+   starts, and you land on the Overview. If the test found that no queue
+   keeps up with your line on this router, or that the line kept its ping
+   under full load without shaping, step ③ also offers **Use Ping Filter
+   only**.
 
 **System → Maintenance → Undo last Auto Setup** puts back the settings the
 last Auto Setup changed (anything you changed since stays), shaping on or
@@ -148,7 +154,8 @@ QoS-Ex sorts traffic](LUCI-GUIDE.md#how-qos-ex-sorts-traffic)).
 **Setup → Line → Download rate (Mbps)** and **Upload rate (Mbps)**: enter
 what a speed test measures, then **Save & Apply**. **Headroom** (default
 90%) takes the margin off for you, so do not lower the numbers yourself.
-`0` leaves that direction unshaped.
+`0` leaves that direction unshaped. Both `0` runs the Ping Filter only
+(below).
 
 **Link layer** and **Overhead** describe the line. Auto Setup sets both
 from the WAN type; to set them by hand:
@@ -206,6 +213,12 @@ added by its address under the table.
 
 The Ping Filter is optional. It needs a gaming device set as above, then
 its own setup: [PINGFILTER.md](PINGFILTER.md).
+
+**Ping Filter only:** with both rates at `0` (or **Ping Filter only** in Auto
+Setup) QoS-Ex shapes nothing and runs the Ping Filter alone. It builds no
+queue and no rules, so it also works beside another shaper (SQM, for
+example). Flow offloading still goes off. To shape again, set the rates or
+run Auto Setup (**Shape the line…** on the Overview).
 
 ### Check it is working
 
@@ -449,7 +462,7 @@ The Ping Filter's `pingfilter` section is in
 |---|---|---|
 | `enabled` | `0` | Master switch |
 | `wan` | the default-route device (with two lines, the one with the lower metric), else `eth0` | WAN device: the one `ip route get 1.1.1.1` names (`pppoe-wan`, not the port under it). A switch's CPU port (DSA conduit) is refused |
-| `download_kbps` / `upload_kbps` | `100000` | Line speed in kbit/s, as measured. `0` = do not shape that direction |
+| `download_kbps` / `upload_kbps` | `100000` | Line speed in kbit/s, as measured. `0` = do not shape that direction; both `0` = the Ping Filter only, nothing shaped |
 | `bw_headroom` | `90` | Shaped rate as a % of line speed, 50–100 (`100` = off); out of range = 90. With `hfsc` or `htb` keep it at 90 or lower: they charge a burst of merged packets (GRO) as one, 3–5% under the wire for bulk TCP |
 | `qdisc` | `cake` | `cake`, `hfsc` or `htb` |
 | `nft_mode` | `adaptive` | Rule set: `adaptive`, `advanced` or `simple` (SGS) |
@@ -599,4 +612,5 @@ Adaptive also reads `udp_fast_pps`, `udp_fast_burst`, `udp_small_avgpkt`,
 | `high_cores` / `high_mhz` / `high_ram_mb` | `4` / `1500` / `1024` | At or over all three (or any x86 router) the router is high-end; between low and high it is mid-range. The figures are the router's own: a router sold with 1 GB reports a little under 1024 MB, and a CPU that reports no speed counts as 0, so both are mid-range |
 | `queue_low` / `queue_mid` / `queue_high` | `htb` / `hfsc` / `cake` | The queue suggested for each kind of router when no queue check ran: `cake`, `hfsc` or `htb`. It is one step lighter (never two) after `cake_max_mbit` or `cpu_busy_pct`, never richer than a queue the check found does not keep up, and HTB is suggested instead when the queue's kernel module is missing |
 | `cake_max_mbit` | `500` | With no queue check, on a router that is not x86, a line faster than this many Mbit (either way) gets HFSC instead of CAKE: CAKE shapes each direction on one CPU core. `0` = off |
+| `bloat_ok_ms` | `5` | After a speed test, a line whose ping rose less than this many ms each way, measured at the line's own speed (not held by the WAN port or the CPU), gets **Ping Filter only** offered beside the settings. `0` = never |
 | `rules_low` / `rules_mid` / `rules_high` | `simple` / `adaptive` / `adaptive` | The rule set suggested for each kind of router: `simple`, `advanced` or `adaptive` |

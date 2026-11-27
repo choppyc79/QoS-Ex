@@ -5,7 +5,38 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.3 · Ping Filter 2.1.0.5 · shaper 3.2.2.8**
+Current: **LuCI app 1.4.1.5 · Ping Filter 2.1.0.8 · shaper 3.2.2.9**
+
+## LuCI app 1.4.1.5
+
+- Added: **Try first** on the Ping Filter **Dashboard**'s **Ping** and **Distance** cards. The mode grades servers as usual but blocks nothing, so you see what it would block before it does: the card counts those servers and names the ones your devices are talking to now, with **Block now** (turn the mode on) and **Stop trying** (back to what ran before). While trying, the banner, the **Overview** and the QoS-Ex box on LuCI's **Status → Overview** read **Trying**, and the **Servers** list and the **Map** mark those servers **would block**.
+
+## Ping Filter 2.1.0.8
+
+- Added: `pingfilter try <casual|competitive|ping|distance>` grades with that mode but blocks nothing: only the **Always block** list still blocks; the mode's blocks, a country list and the Ping Catch /24s stay out of the firewall, new servers are not held and no connection is cut. `pingfilter try now` blocks with the mode tried; `pingfilter try stop` puts back the mode, limit and base ping that ran before. Picking a mode (`profile`, `mode`) ends a try; a new limit, radius or Ping Catch keeps it. `pingfilter status` and the servers list say so (`trying=1`; servers it would block read `would`).
+
+## LuCI app 1.4.1.4
+
+- Added: **Ping Filter only** on Auto Setup's first card, for a line that needs no shaping or a router too slow to shape it. It skips the speed test and the devices, sets both rates to 0 and sizes the Ping Filter for the router (Lite, the server list, how often it is saved), then opens the Ping Filter **Dashboard**, whose setup card picks the gaming device, the mode and home. Typing 0 for both speeds does the same.
+- Added: after a speed test, Auto Setup offers **Use Ping Filter only** when no queue keeps up with the line on the router, or when the line kept its ping under full load without shaping.
+- Changed: with both rates at 0 the banner and the QoS-Ex box on LuCI's **Status → Overview** read **Ping Filter only**, and the Ping Filter shows as on while it runs (before, only while shaping). The **Overview** says nothing is shaped and has **Shape the line…** (Auto Setup again); **Live → Stats** and **System → Status** say so too, and Setup's rate help says both 0 = Ping Filter only.
+
+## Shaper 3.2.2.9
+
+- Added: both rates at 0 run the Ping Filter only: no queue, IFB or rule set, so nothing of another shaper's on the line is checked or touched. Flow offloading still goes off when QoS-Ex is switched on: the Ping Filter needs it off. Set a rate and the shaper starts; the Ping Filter stays up through the change, both ways.
+- Fixed: with both rates at 0 the shaper refused to start ("nothing to shape"), and the Ping Filter kept running only until the next start: every start stops first, the stop parks the Ping Filter, and only a shaper start let it go again. A reboot, a PPPoE redial or the next Save & Apply left it off. The ifup hook restarted QoS-Ex on every ifup, and LuCI read the router as stopped.
+- Added: Auto Setup's suggestions for 0 and 0 (`qos-ex.sh autosetup suggest 0 0`) give only the rows that matter with nothing shaped, and after a speed test it can offer the Ping Filter only (a `pfonly|` line): when no queue keeps up with the line, or when its ping rose less than `autosetup.bloat_ok_ms` (new, 5 ms) each way at the line's own limit.
+
+## Ping Filter 2.1.0.7
+
+- Fixed: 2.1.0.6's clean-up did not stick on the routers it was written for, where every graded server and played match had impossible stutter. The log said they were dropped, then the Ping Filter put them back from its copy on flash as it started, so the same grades stayed. The drop is now saved to flash at once, and the jitter those matches left on each server (the **Servers** list scores on it once the grade is gone) is cleared with it. When there was no graded history, the log line counted the dropped matches as graded servers; it no longer does.
+- Fixed: when only the Ping Filter was updated, its background service, restarting at the same moment, could put the server list back as it was a moment before, undoing what the update had just changed in it (its re-grade and the clean-up above).
+- Fixed: clearing the **Always allow** or **Always block** list right after **Clear cache** brought its servers back at the next restart or settings change.
+- Fixed: **Ignore UDP ports** written with a leading zero (`03478-03481`) were left out without a word; they now count as written.
+
+## Ping Filter 2.1.0.6
+
+- Fixed: on a router whose tcpdump cannot decode the packets on its internet line (seen with a PPPoE line), the stutter and jitter of the servers you play were wrong, and the grades with them. tcpdump then prints each packet's time followed by its raw bytes, and the Ping Filter read those lines as times too, so every packet counted as about 19 gaps (thousands a minute). It now reads only each packet's time. Grades and played matches with more gaps than can fit (over 500 a minute) are dropped when the Ping Filter starts; the servers are graded again from your next matches.
 
 ## LuCI app 1.4.1.3
 

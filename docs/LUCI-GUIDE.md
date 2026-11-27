@@ -32,7 +32,8 @@ LuCI pauses; the two Live pages have their own refresh selector.
 
 The banner above the tabs shows the QoS-Ex release installed beside the
 name (for example **QoS-Ex v1.1.0**), whether the shaper and the Ping Filter
-are on, whether a game is being played, the main figures for the tab you are
+are on (one **Ping Filter only** pill with both rates at 0), whether a game
+is being played, the main figures for the tab you are
 on, and at the right the branch installed, `main` or `dev`. On `dev` the
 number is the last release: dev holds the changes made since. The version
 of each part is on **System → Maintenance → Versions & updates**.
@@ -92,10 +93,16 @@ is done it goes away.
 
 ### Getting started
 
-The **Set up QoS-Ex** card offers three choices:
+The **Set up QoS-Ex** card offers four choices:
 
 - **Auto Setup** — runs the router check and the speed test, then takes you
   through the steps below.
+- **Ping Filter only** — no shaping, for a line that keeps its ping under
+  load or a router too slow to shape it. No speed test and no devices: one
+  step lists the settings (both rates 0, the Ping Filter sized for the
+  router), and **Apply and start** turns QoS-Ex on and opens the Ping Filter
+  **Dashboard**, whose setup card does the rest. **Back** returns to the
+  choices. Typing 0 for both speeds in step ① does the same.
 - **Manual setup** — keeps the defaults (CAKE, Adaptive rules) and opens
   **Setup → Line**. If QoS-Ex was set up before, this reads **Keep current
   settings** and changes nothing.
@@ -228,6 +235,11 @@ the shaper on. The button reads **Finish and start** when nothing needs to
 change, and just **Apply** or **Finish** while the shaper is already
 running. The Overview opens when it is done.
 
+When the speed test found that no queue keeps up with your line on this
+router, or that the line kept its ping under full load without shaping (it
+rose less than 5 ms each way, `bloat_ok_ms`, at the line's own speed), a row
+says so with a **Use Ping Filter only** button.
+
 **Packet steering** spreads the work of receiving packets over the CPU
 cores. If it is off on a router with more than one core, Auto Setup offers a
 separate **Turn on** button. Packet steering is an OpenWrt network setting,
@@ -273,10 +285,12 @@ The other cards are always there:
   Under the switch: the queue type and rule set, how long the shaper has been
   running, and the rates it shapes at. **Restart** stops and starts the
   shaper. **Reload rules** reloads the rules, and restarts the shaper only if
-  a queue setting has changed. **Settings** opens Setup.
+  a queue setting has changed. **Settings** opens Setup. With both rates at
+  0 it reads **Ping Filter only · both rates 0** and **nothing shaped**, and
+  **Shape the line…** opens Auto Setup again.
 - **Ping Filter** — the switch, the mode in words (`Ping ≤ 40 ms`,
-  `Distance ≤ 1000 km · Ping Catch ≤ 40 ms`, `Watch only`), and what it is
-  doing:
+  `Distance ≤ 1000 km · Ping Catch ≤ 40 ms`, `Watch only`; `Trying: Ping ≤
+  60 ms` while a mode is tried), and what it is doing:
   - **In match**: you are playing.
   - **Matchmaking**: a gaming device is looking for a game (UDP to game
     ports, never a download or a web page).
@@ -337,7 +351,8 @@ The Ping Filter's main page. Along the top:
   allow and Always block lists.
 
 The figure tiles (**Mode**, **Servers**, **Always allow / block**,
-**Watched devices**, **Allowed / blocked**) each link to where that is set.
+**Watched devices**, **Allowed / blocked**, or **Allowed / would block**
+while a mode is tried) each link to where that is set.
 
 **Mode cards.** Click one to switch mode. Each mode keeps its own number. The
 line above the cards says what is running; the card in use shows only its
@@ -356,6 +371,15 @@ controls, the others what a click gives you.
 - **Watch only** — find and grade servers. Only the Always block list and a
   country list block anything.
 
+**Try first**, on the Ping and Distance cards, grades servers as that mode
+but blocks nothing: only the Always block list still blocks. The card then
+reads **Trying: nothing is blocked**, with how many servers the mode would
+block and the ones your devices are talking to now (**In use now**); the
+line above the cards starts **Trying**. **Block now** turns the mode on,
+**Stop trying** goes back to what ran before. While trying, Casual,
+Competitive and the numbers are tried too; clicking another card picks it
+for real.
+
 Mode changes apply at once, even to the server you are playing on. While a
 match is on, the Dashboard warns: **A game is on: this may block the server
 you're playing**. Which mode to choose: [Pick a
@@ -372,14 +396,17 @@ A ping is shown as **measured** (by ping, or by timing the game's first
 exchange with the server, the handshake) or as an **estimate**, for a
 server measured neither way yet.
 
-**Played servers** — every server you have played on, with its grade, play
+**Graded servers** — every server you have played on, with its grade, play
 time and when you last played on it. Click one for the detail:
 
 - how its score is made up, its verdict, and where its ping came from;
 - its distance from home, jitter, stutter, packet rate and time played;
 - its last five matches.
 
-**×** clears a server's history.
+**×** takes a server off this card and drops the jitter and stutter it was
+graded on. Its ping, verdict and past matches stay: play on it again and it
+is graded on fresh jitter and stutter, with its old matches back in its
+detail.
 
 | Grade | Score |
 |---|---|
@@ -448,7 +475,8 @@ and Always block entry, including one not seen yet. With `max_servers` set
 above 800, the table shows the first 800 and the servers in use.
 
 - The chips show only allowed, blocked, always allowed, always blocked or
-  cached (known from earlier) servers.
+  cached (known from earlier) servers, and while a mode is tried the ones it
+  would block.
 - The list starts nearest first: by distance from your home location,
   then by ping, with servers not located yet last. **Sort** changes that,
   and the search box finds an address, country, city or owner.
@@ -459,7 +487,8 @@ On each row:
 
 - Its state. **held**: with Ping Catch, a server outside your radius with no
   ping of its own yet, kept out of the game until its own ping is graded.
-  **catch**: one Ping Catch let in on its own ping.
+  **catch**: one Ping Catch let in on its own ping. **would block**: one
+  the mode being tried would block (nothing is blocked while trying).
 - **Allow** or **Block** pins the server either way. Press the lit one again
   to unpin it, so it is judged by ping or distance again.
 - **×** forgets the server: everything except its location.
@@ -585,7 +614,8 @@ rules.
   not exist, or a switch's CPU port, stops QoS-Ex from starting and says
   so. One that exists but is not your line is flagged as a WAN mismatch.
 - **Download rate (Mbps)** and **Upload rate (Mbps)** — your line speed as a
-  speed test measures it. `0` leaves that direction unshaped.
+  speed test measures it. `0` leaves that direction unshaped; both `0` runs
+  the Ping Filter only, with nothing shaped.
 - **Headroom** — how far under the line speed to shape: 100% (off), or 95%
   down to 70%; 90% by default. Shaping a little under the line keeps the
   queue on the router, where QoS-Ex controls it, rather than in the modem or

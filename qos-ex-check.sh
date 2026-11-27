@@ -17,6 +17,10 @@
 #     redial    ifup wan                                     the internet drops a few seconds
 #     rules     each other rule set in turn, then back       a settings change, undone (three reloads)
 #     queue     HTB for a moment, then back                  a settings change, undone; shaping off ~10 s twice
+#     pfonly    both rates 0 for a moment, then back         a settings change, undone (two reloads):
+#                                                            nothing shaped while it runs
+#     try       Try first: Competitive for a moment, then    a settings change, undone: nothing the
+#               Stop trying                                  Ping Filter decides is blocked meanwhile
 #     update    two Update now at once                       runs the updater: installs what changed, if anything
 #     speedtest Auto Setup's speed test and queue check      shaping and the Ping Filter off about a
 #                                                            minute; traffic to Cloudflare (or LibreSpeed)
@@ -119,12 +123,15 @@ shaper() {
 	"$Q" status > "$T/status" 2>&1
 	s=""; for k in enabled running qdisc nft_mode wan wan_live ifb download_on shape_up shape_dn ul_kbps_eff dl_kbps_eff wash_down; do s="$s $k=$(st $k)"; done
 	info "${s# }"
-	[ "$(st running)" = 1 ] && pass "running" || fail "not running (enabled=$(st enabled))"
+	if [ "$(st running)" = 1 ]; then pass "running"
+	elif [ "$(st pf_only)" = 1 ]; then pass "running the Ping Filter only: both rates 0 (shaper 3.2.2.9)"
+	else fail "not running (enabled=$(st enabled))"; fi
 	for k in root_qdisc ingress_qdisc ifb_up ctinfo nft_table init hotplug; do
 		off=0
 		[ "$k" = root_qdisc ] && [ "$(st shape_up)" = 0 ] && off=1
 		case "$k" in ingress_qdisc|ifb_up|ctinfo) [ "$(st shape_dn)" = 0 ] && off=1 ;; esac
-		if [ "$off" = 1 ]; then info "$k: that direction is not shaped"
+		[ "$k" = nft_table ] && [ "$(st pf_only)" = 1 ] && off=1
+		if [ "$off" = 1 ]; then info "$k: not shaped (that direction, or the Ping Filter only)"
 		elif [ "$(st $k)" = 1 ]; then pass "health $k"
 		else fail "health $k=$(st $k)"; fi
 	done
@@ -343,6 +350,8 @@ hook() {
 	[ -f "$HOOK" ] || { fail "$HOOK missing"; return; }
 	n=$(grep -c hp_again "$HOOK")
 	[ "$n" = 3 ] && pass "the 3.2.0.8 hook (replays an ifup that comes during a restart)" || fail "hook without the 3.2.0.8 replay (hp_again x$n)"
+	grep -q 'Ping Filter only, nothing to do' "$HOOK" && pass "the hook leaves the Ping Filter only alone on an ifup (shaper 3.2.2.9)" ||
+		fail "hook without the Ping Filter only answer (shaper 3.2.2.9)"
 	if [ -d "$LOCK" ]; then info "hotplug lock held ($(($(now) - $(cat "$LOCK/ts" 2>/dev/null || echo 0))) s old)"
 	else pass "no hotplug lock held"; fi
 	logread -e QoS-Ex-hotplug 2>/dev/null | tail -n 4 | ind
@@ -359,6 +368,47 @@ counters() {
 	b=$(cs); i=0; while [ $i -lt 10 ]; do "$Q" counters >/dev/null 2>&1; i=$((i + 1)); done
 	c=$(cs)
 	info "counters, average of 10 calls: $((b - a)) ms through rpcd (the light way), $((c - b)) ms through the whole backend"
+}
+
+# Both rates 0 (shaper 3.2.2.9): the Ping Filter only. Nothing of QoS-Ex's on
+# any device and no shaper rule set; the pages read it from state and from
+# the counters. Read-only.
+pfonly() {
+	sec "Ping Filter only (shaper 3.2.2.9)"
+	"$Q" state > "$T/state" 2>/dev/null
+	[ "$(kv "$T/state" pf_only)" = 1 ] && pass "state: pf_only=1 (running=$(kv "$T/state" running))" ||
+		fail "state: pf_only=$(kv "$T/state" pf_only) under a Ping Filter only stamp"
+	if grep -qE '^(WAN|IFB)=' "$STAMP"; then fail "the start stamp names a device: $(grep -E '^(WAN|IFB)=' "$STAMP" | tr '\n' ' ')"
+	else pass "the start stamp names no device (another shaper's queue stays its own)"; fi
+	n=$(shaper_tables)
+	[ "$n" = 0 ] && pass "no shaper rule set loaded" || fail "$n shaper table(s) loaded"
+	n=$(ls /var/run/qos-ex/qos_ex_*.nft 2>/dev/null | wc -l)
+	[ "$n" = 0 ] && pass "no rule-set file in /var/run/qos-ex" || fail "$n rule-set file(s) in /var/run/qos-ex"
+	o=""
+	for d in $(ifbs); do
+		a=""; [ -r "/sys/class/net/$d/ifalias" ] && read -r a < "/sys/class/net/$d/ifalias"
+		[ "$a" = qos-ex ] && o="$o $d"
+	done
+	[ -z "$o" ] && pass "no IFB of QoS-Ex's" || fail "a QoS-Ex IFB is left:$o"
+	w=$(uci -q get qos-ex.settings.wan); k=$(rootkind "$w")
+	case "$k" in
+		cake|cake_mq|hfsc|htb) info "$w root $k: another shaper's (QoS-Ex built none)" ;;
+		*) pass "no shaping queue on $w (root ${k:-none})" ;;
+	esac
+	r=$(ubus call qos-ex counters 2>/dev/null); o=$(jsonfilter -s "$r" -e '@.output' 2>/dev/null)
+	case "$o" in
+		*pf_only=1*) pass "the counters reply says the Ping Filter only (Status tile, Stats)" ;;
+		*) fail "no pf_only=1 in the counters reply" ;;
+	esac
+	if [ "$(uci -q get qos-ex.pingfilter.enabled)" = 1 ]; then
+		p=$(cat "$PFR/daemon.pid" 2>/dev/null)
+		[ -n "$p" ] && kill -0 "$p" 2>/dev/null && pass "the Ping Filter daemon runs (pid $p)" || fail "the Ping Filter is on, but no daemon runs"
+		[ -e "$PFR/.stopped" ] && fail "the Ping Filter is parked (.stopped): the 3.2.2.8 fault" || pass "the Ping Filter is not parked"
+		nft list tables 2>/dev/null | grep -q 'qos_ex_pf$' && pass "Ping Filter table qos_ex_pf loaded" || fail "no Ping Filter table"
+	else
+		info "the Ping Filter is off: set it up on Ping Filter -> Dashboard"
+	fi
+	logread -e QoS-Ex 2>/dev/null | grep 'Ping Filter only' | tail -n 3 | ind
 }
 
 # LuCI app 1.4.0.1: the lighter page calls. Read-only (a peek asks the Ping
@@ -434,10 +484,19 @@ gameflows() {
 	head -n "${1:-3}" "$T/ct" | cut -f1-8 | tr '\t' ' ' | ind
 }
 
+# The addresses in @ping_blocked that are not on Always block (the list, or
+# a server inside a listed prefix: its row reads blacklist).
+pf_blk_extra() {
+	_bl=" $(uci -q get qos-ex.pingfilter.blacklist) $(awk -F'\t' '$2 == "blacklist" { printf "%s ", $1 }' "$PFR/servers.tsv" 2>/dev/null) "
+	nft list set inet qos_ex_pf ping_blocked 2>/dev/null | tr ',' '\n' \
+		| awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print $i }' \
+		| while read -r _ip; do case "$_bl" in *" $_ip "*) ;; *) printf '%s ' "$_ip" ;; esac; done
+}
+
 pingfilter() {
 	sec "Ping Filter"
 	"$PFB" status > "$T/pf" 2>&1
-	s=""; for k in enabled master_enabled running activity block_mode threshold_ms ping_catch_ms hold_active lite offload total allowed blocked whitelist blacklist prereq_ok; do s="$s $k=$(pfk $k)"; done
+	s=""; for k in enabled master_enabled running activity block_mode threshold_ms ping_catch_ms hold_active trying lite offload total allowed blocked whitelist blacklist prereq_ok; do s="$s $k=$(pfk $k)"; done
 	info "${s# }"
 	if [ "$(pfk enabled)" = 1 ] && [ "$(pfk master_enabled)" = 1 ]; then
 		[ "$(pfk running)" = 1 ] && pass "daemon running" || fail "on, but the daemon is not running"
@@ -463,9 +522,19 @@ pingfilter() {
 		case "$(nft list chain inet qos_ex_pf enforce 2>/dev/null | grep pf-hold)" in
 			*'ct direction original ct original packets'*) pass "first-packets hold: only flows the device opened (2.0.9.9)" ;;
 			*'ct original packets'*) fail "first-packets hold also holds flows a server opened (no ct direction original)" ;;
-			'') info "no new-server hold (watch only, or first_pkts 0)" ;;
+			'') info "no new-server hold (watch only, a mode being tried, or first_pkts 0)" ;;
 			*) info "new-server hold: full hold" ;;
 		esac
+		# 2.1.0.8: Try first grades as a mode and blocks nothing but Always
+		# block: no new-server hold, nothing else in @ping_blocked.
+		if [ "$(pfk trying)" = 1 ]; then
+			info "a mode is being tried (Try first): nothing it decides is blocked"
+			if nft list chain inet qos_ex_pf enforce 2>/dev/null | grep -q pf-hold; then fail "a mode is being tried, but the new-server hold is in"
+			else pass "no new-server hold while a mode is tried (2.1.0.8)"; fi
+			x=$(pf_blk_extra)
+			[ -z "$x" ] && pass "only Always block entries are blocked while a mode is tried (2.1.0.8)" \
+				|| fail "blocked while a mode is tried, not on Always block: $(printf '%s' "$x" | cut -c1-200)"
+		fi
 		# Ping Catch (2.0.9.8): a server whose own ping is over the catch is let
 		# in only inside the radius, or while it is played (blocked after it).
 		# The Ping Filter's own functions, in a subshell: nothing is written.
@@ -503,7 +572,7 @@ pingfilter() {
 					printf '%s ~%sms %s; ' "$PF_C_IP" "$PF_C_PING" "$PF_C_SRC"
 				done 3< "$PF_SERVERS_TSV" 2>/dev/null)
 			case "$x" in
-				SKIP) info "Ping Catch with a country list or first_pkts 0: a server with no ping of its own is let in on its estimate" ;;
+				SKIP) info "Ping Catch with a country list, first_pkts 0 or a mode being tried: a server with no ping of its own is let in on its estimate" ;;
 				'') pass "Ping Catch: no server outside the radius let in on no ping of its own (2.1.0.0)" ;;
 				*) fail "Ping Catch: let in outside the radius on no ping of its own: $(printf '%s' "$x" | cut -c1-300)" ;;
 			esac
@@ -533,12 +602,14 @@ pingfilter() {
 				*) info "hs_quiet not reported (a Ping Filter older than 2.1.0.2)" ;;
 			esac
 			# 2.1.0.4: the listener leaves out the Ignore UDP ports set now (it
-			# keeps the list it started with: a change starts it again).
+			# keeps the list it started with: a change starts it again). Each
+			# read sits in braces: a process can end while the loop walks /proc,
+			# and ash opens a file before a 2>/dev/null after it applies.
 			lp=""; li=""
 			for p in /proc/[0-9]*; do
 				c=""; { read -r c < "$p/comm"; } 2>/dev/null; [ "$c" = awk ] || continue
-				tr '\0' '\n' < "$p/cmdline" 2>/dev/null | grep -qx 'qos_ex_pf=handshake' || continue
-				lp=${p#/proc/}; li=$(tr '\0' '\n' < "$p/cmdline" 2>/dev/null | sed -n 's/^ign=//p'); break
+				{ tr '\0' '\n' < "$p/cmdline"; } 2>/dev/null | grep -qx 'qos_ex_pf=handshake' || continue
+				lp=${p#/proc/}; li=$({ tr '\0' '\n' < "$p/cmdline"; } 2>/dev/null | sed -n 's/^ign=//p'); break
 			done
 			li=$(printf '%s\n' "$li" | awk '{ for (i = 1; i <= NF; i++) { split($i, q, "-"); s = s (s == "" ? "" : ", ") (q[1] == q[2] ? q[1] : $i) } } END { print s }')
 			if [ -z "$lp" ]; then info "the handshake listener is not running now"
@@ -582,6 +653,22 @@ pingfilter() {
 	[ "$n" -le 2000 ] && pass "/24 memory: $n rows (at most 2000)" || fail "/24 memory: $n rows (more than 2000)"
 	n=$(lines "$PFR/telemetry-hist.tsv")
 	[ "$n" -le $((m + 50)) ] && pass "play history: $n rows (at most $((m + 50)))" || fail "play history: $n rows (more than $((m + 50)))"
+	# 2.1.0.6 / 2.1.0.7: no graded server or played match with more gaps than
+	# can fit (a gap is a silence over 120 ms: 500 a minute at most), on the
+	# router or in its copy on flash (a start puts that copy back when the
+	# router's list is empty; 2.1.0.7 saves the drop at once).
+	fl=""
+	for f in "$PFR/telemetry-hist.tsv" "$PFR/sessions.tsv" /etc/qos-ex/pf-cache/telemetry.tsv /etc/qos-ex/pf-cache/sessions.tsv; do
+		[ -s "$f" ] && fl="$fl $f"
+	done
+	if [ -z "$fl" ]; then
+		info "no graded servers or played matches yet"
+	else
+		# shellcheck disable=SC2086 # file paths, no blanks
+		x=$(awk -F'\t' '{ g = (FILENAME ~ /sessions/) ? $6 : $7 } $3 + 0 > 0 && g * 120 > $3 * 1000 { n++ } END { print n + 0 }' $fl 2>/dev/null)
+		[ "${x:-0}" = 0 ] && pass "no grade or match with more gaps than can fit, live or on flash (2.1.0.7)" \
+			|| fail "$x grade(s) or match(es) with more gaps than can fit (over 500 a minute), live or on flash"
+	fi
 	j=$("$PFB" matchmaking 2>/dev/null)
 	jsonfilter -s "$j" -e '@.servers' >/dev/null 2>&1 && pass "matchmaking prints valid JSON (2.0.9.3)" || fail "matchmaking output is not JSON"
 	n=$(logread 2>/dev/null | grep -c 'Terminated')
@@ -753,6 +840,100 @@ test_queue() {
 	[ "$(st qdisc)" = "$q0" ] && pass "queue type back to $q0" || fail "queue type $(st qdisc), want $q0"
 }
 
+# test pfonly: the rates as they were. Also from the exit trap, so a run
+# stopped part-way does not leave both rates at 0.
+rates_back() {
+	[ -f "$T/rates" ] || return 0
+	read -r _d _u < "$T/rates"
+	rm -f "$T/rates"
+	if [ "$_d" = - ]; then uci -q delete qos-ex.settings.download_kbps; else uci set qos-ex.settings.download_kbps="$_d"; fi
+	if [ "$_u" = - ]; then uci -q delete qos-ex.settings.upload_kbps; else uci set qos-ex.settings.upload_kbps="$_u"; fi
+	uci commit qos-ex
+	svc reload >/dev/null 2>&1
+}
+
+# Both rates 0 for a moment (the Ping Filter only), then back: two reloads,
+# nothing shaped in between; the Ping Filter stays up through both.
+test_pfonly() {
+	sec "TEST pfonly: both rates 0 for a moment, then back"
+	[ "$(sv MODE)" = pf ] && { info "already the Ping Filter only: the section above covers it"; return; }
+	running || { skip "the shaper is not running"; return; }
+	d0=$(uci -q get qos-ex.settings.download_kbps) u0=$(uci -q get qos-ex.settings.upload_kbps)
+	echo "${d0:--} ${u0:--}" > "$T/rates"
+	p0=$(cat "$PFR/daemon.pid" 2>/dev/null)
+	uci set qos-ex.settings.download_kbps=0; uci set qos-ex.settings.upload_kbps=0; uci commit qos-ex
+	t0=$(now); svc reload >/dev/null 2>&1
+	i=0; while [ "$i" -lt 20 ] && [ "$(sv MODE)" != pf ]; do sleep 1; i=$((i + 1)); done
+	[ "$(sv MODE)" = pf ] && pass "the Ping Filter only $(($(now) - t0)) s after the reload" || fail "no Ping Filter only stamp 20 s after the reload"
+	pfonly
+	p=$(cat "$PFR/daemon.pid" 2>/dev/null)
+	[ -z "$p0" ] || { [ "$p" = "$p0" ] && pass "the Ping Filter stayed up (pid $p0)" || info "the Ping Filter restarted (pid $p0 -> ${p:-none})"; }
+	# The ifup hook by hand, as netifd runs it: nothing to do now.
+	if [ "$(sv MODE)" = pf ]; then
+		a0=$(hp 'Ping Filter only, nothing to do') r0=$(hp 'restarting QoS-Ex')
+		ACTION=ifup INTERFACE=wan DEVICE="$(uci -q get qos-ex.settings.wan)" sh "$HOOK"; sleep 2
+		if [ "$(hp 'Ping Filter only, nothing to do')" -gt "$a0" ] && [ "$(hp 'restarting QoS-Ex')" = "$r0" ]; then
+			pass "ifup: the hook answers Ping Filter only, no restart"
+		else fail "ifup: no Ping Filter only answer from the hook, or a restart"; fi
+	fi
+	rates_back
+	t0=$(now)
+	wait_running 30 && pass "shaping again $(($(now) - t0)) s after the rates came back" || fail "not shaping 30 s after the rates came back"
+	[ "$(sv MODE)" = pf ] && fail "the stamp still says the Ping Filter only" || pass "the start stamp is a shaping one again"
+	p=$(cat "$PFR/daemon.pid" 2>/dev/null)
+	[ -z "$p0" ] || { [ "$p" = "$p0" ] && pass "the Ping Filter stayed up through both (pid $p0)" || info "the Ping Filter restarted (pid $p0 -> ${p:-none})"; }
+}
+
+# test try: what ran before the try. Also from the exit trap, so a run
+# stopped part-way does not leave a mode tried.
+try_back() {
+	[ -f "$T/try" ] || return 0
+	rm -f "$T/try"
+	[ "$(uci -q get qos-ex.pingfilter.trying)" = 1 ] && "$PFB" try stop >/dev/null 2>&1
+	return 0
+}
+
+# Try first (Ping Filter 2.1.0.8): Competitive tried for a moment, then Stop
+# trying. Nothing the mode decides is blocked meanwhile; after it the mode,
+# the limit, the base ping and the hold are as they were.
+test_try() {
+	sec "TEST try: Competitive tried for a moment, then stopped"
+	"$PFB" status > "$T/pf" 2>&1
+	{ [ "$(pfk enabled)" = 1 ] && [ "$(pfk running)" = 1 ]; } || { skip "the Ping Filter is not running"; return; }
+	[ "$(pfk trying)" = 1 ] && { info "a mode is being tried already: the Ping Filter section covers it"; return; }
+	m0=$(uci -q get qos-ex.pingfilter.block_mode) t0=$(uci -q get qos-ex.pingfilter.threshold_ms)
+	b0=$(uci -q get qos-ex.pingfilter.base_ms) h0=$(pfk hold_active)
+	: > "$T/try"
+	"$PFB" try competitive >/dev/null 2>&1 || fail "pingfilter try competitive: rc $?"
+	# The re-grade runs in the background: up to 20 s for the sets to follow.
+	i=0; x=-
+	while [ "$i" -lt 20 ]; do
+		sleep 1; i=$((i + 1))
+		x=$(pf_blk_extra)
+		[ -z "$x" ] && break
+	done
+	"$PFB" status > "$T/pf" 2>&1
+	[ "$(pfk trying)" = 1 ] && pass "trying=1 after try competitive (limit $(pfk threshold_ms) ms)" || fail "trying=$(pfk trying) after try competitive"
+	if nft list chain inet qos_ex_pf enforce 2>/dev/null | grep -q pf-hold; then fail "the new-server hold is in while trying"
+	else pass "no new-server hold while trying"; fi
+	[ -z "$x" ] && pass "only Always block entries are blocked, $i s after the try" \
+		|| fail "blocked while trying, not on Always block: $(printf '%s' "$x" | cut -c1-200)"
+	j=$("$PFB" servers 2>/dev/null)
+	[ "$(jsonfilter -s "$j" -e '@.trying' 2>/dev/null)" = 1 ] && pass "the servers JSON says trying" || fail "the servers JSON has no trying 1"
+	n=$(jsonfilter -s "$j" -e '@.servers[@.state="blocked"].ip' 2>/dev/null | grep -c .)
+	w=$(jsonfilter -s "$j" -e '@.servers[@.state="would"].ip' 2>/dev/null | grep -c .)
+	[ "$n" = 0 ] && pass "no server reads blocked, $w read would block" || fail "$n server(s) read blocked while trying"
+	rm -f "$T/try"
+	"$PFB" try stop >/dev/null 2>&1 || fail "pingfilter try stop: rc $?"
+	"$PFB" status > "$T/pf" 2>&1
+	[ "$(pfk trying)" = 0 ] && pass "trying=0 after try stop" || fail "trying=$(pfk trying) after try stop"
+	m=$(uci -q get qos-ex.pingfilter.block_mode) t=$(uci -q get qos-ex.pingfilter.threshold_ms) b=$(uci -q get qos-ex.pingfilter.base_ms)
+	if [ "$m" = "$m0" ] && [ "$t" = "$t0" ] && [ "$b" = "$b0" ]; then pass "mode, limit and base ping as they were (${m0:-unset}, ${t0:-unset} ms, base ${b0:-unset})"
+	else fail "after try stop: ${m:-unset} ${t:-unset} ms base ${b:-unset}, was ${m0:-unset} ${t0:-unset} ms base ${b0:-unset}"; fi
+	[ -z "$(uci -q get qos-ex.pingfilter.try_back)" ] && pass "no try_back left" || fail "try_back still set: $(uci -q get qos-ex.pingfilter.try_back)"
+	[ "$(pfk hold_active)" = "$h0" ] && pass "the new-server hold as before (hold_active=$h0)" || fail "hold_active=$(pfk hold_active), was $h0"
+}
+
 test_redial() {
 	sec "TEST redial (the internet drops a few seconds)"
 	ubus call network.interface.wan status >/dev/null 2>&1 || { skip "no network interface 'wan' (netifd)"; return; }
@@ -858,11 +1039,15 @@ test_speedfallback() {
 
 main() {
 	echo "QoS-Ex check $(date '+%Y-%m-%d %H:%M:%S'), script #$(sha256sum "$0" 2>/dev/null | cut -c1-10), arguments: ${*:-none}"
-	versions; shaper; nftables; queues; dscp_restore; ef_fixes; ctmark; hook; counters; app_calls; gameflows; pingfilter; logs
+	versions; shaper
+	# The Ping Filter only (both rates 0): no queue or rule set to check.
+	if [ "$(sv MODE)" = pf ]; then pfonly
+	else nftables; queues; dscp_restore; ef_fixes; ctmark; fi
+	hook; counters; app_calls; gameflows; pingfilter; logs
 	for a in "$@"; do
 		case "$a" in
 			match) match ;;
-			reload|burst|restart|ifb|branch|redial|rules|queue|update|speedtest|speedfallback) "test_$a" ;;
+			reload|burst|restart|ifb|branch|redial|rules|queue|pfonly|try|update|speedtest|speedfallback) "test_$a" ;;
 			debug) sec "Debug report (sanitized)"; cat "$T/debug" 2>/dev/null || "$Q" debug 2>&1 ;;
 			*) sec "Unknown argument: $a" ;;
 		esac
@@ -875,7 +1060,7 @@ main() {
 # then renamed into place: a fixed /tmp name is anyone's to plant. A run
 # that is interrupted keeps what it had written.
 T=$(mktemp -d /tmp/qos-ex-check.XXXXXX) || { echo "mktemp failed"; exit 1; }
-trap '[ -f "$T/rv" ] && uci -q revert qos-ex.autosetup.test_url; mv -f "$T/report" "$OUT" 2>/dev/null; rm -rf "$T"' EXIT
+trap 'rates_back; try_back; [ -f "$T/rv" ] && uci -q revert qos-ex.autosetup.test_url; mv -f "$T/report" "$OUT" 2>/dev/null; rm -rf "$T"' EXIT
 trap 'exit 1' INT TERM
 main "$@" 2>&1 | tee "$T/report"
 mv -f "$T/report" "$OUT" && { echo; echo "Saved to $OUT"; }

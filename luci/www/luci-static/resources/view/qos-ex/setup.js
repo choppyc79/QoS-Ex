@@ -161,9 +161,9 @@ function buildShaper(view, scope, loaded) {
 		return watch(opt);
 	}
 	oDn = mbps('download_kbps', _('Download rate (Mbps)'),
-		_('Your measured download speed. 0 = not shaped.'), '100');
+		_('Line download speed. 0 = not shaped; both 0 = Ping Filter only.'), '100');
 	oUp = mbps('upload_kbps', _('Upload rate (Mbps)'),
-		_('Your measured upload speed. 0 = not shaped.'), '100');
+		_('Line upload speed. 0 = not shaped; both 0 = Ping Filter only.'), '100');
 
 	oHr = watch(s.option(form.ListValue, 'bw_headroom', _('Headroom'),
 		_('Shape a little under the line, so the queue stays here.')));
