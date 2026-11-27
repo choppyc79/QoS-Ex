@@ -1,8 +1,8 @@
-#v release=1.1.2 luci=1.4.1.4 pf=2.1.0.7 shaper=3.2.2.9
+#v release=1.1.2 luci=1.4.1.5 pf=2.1.0.8 shaper=3.2.2.9
 45e62bfc3c737a5ad8ee85402c9cd0055280836391d81c4b059a90f0b65b47b3  QoS-Ex.sh
 23e209df2f662831e970ccc382f06bdbeac22e29a8a305e93f456c66798738ec  lib/install.sh
-d51425d1f5178ee16bf788ba02b31830b1e487fb556f27cba43499d6ba4b0a38  QoS-Ex-PF.sh
-eef3031831049c49b2a20ba771cc3c07ec8ff412ac36db1bbc9d8d1d1b573641  QoS-Ex-luci-app.sh
+e56fd8f0c675dfe864318b2b40a353957d2af85fda4134fd750b8b546fa1805d  QoS-Ex-PF.sh
+67b2387bb7868dad922f990a46cfadcd7067a2b69bbecc0d329ca8529fb15bf4  QoS-Ex-luci-app.sh
 94ac62c944451ee575d0ada72832177c9c1f1f4ca7c55c6a6cd118968a274648  QoS-Ex-install.sh
-d232b7d3a00742325af707db3ca5acf2dfe51192632f9629a9730161ce7fa1d6  qos-ex-check.sh
-7fe483fbb5ce484f7bdfd90163bfc36cbb98e2f01951a5d141a0bfbc133a023d  qos-ex-luci.tar.gz
+01def19cdbc0f99560b63ee0df307daf2080adecdfc859e9d814b443f91eec65  qos-ex-check.sh
+9e965979586b1c25c06aff4d4720690f4e83b0be078b187e2e4885a88e6043da  qos-ex-luci.tar.gz
