@@ -5,7 +5,15 @@ the script — `1.x` LuCI app (`QoS-Ex-luci-app.sh`), `2.x` Ping Filter
 (`QoS-Ex-PF.sh`), `3.x` shaper (`QoS-Ex.sh`) — and only a script that changed
 is bumped.
 
-Current: **LuCI app 1.4.1.4 · Ping Filter 2.1.0.7 · shaper 3.2.2.9**
+Current: **LuCI app 1.4.1.5 · Ping Filter 2.1.0.8 · shaper 3.2.2.9**
+
+## LuCI app 1.4.1.5
+
+- Added: **Try first** on the Ping Filter **Dashboard**'s **Ping** and **Distance** cards. The mode grades servers as usual but blocks nothing, so you see what it would block before it does: the card counts those servers and names the ones your devices are talking to now, with **Block now** (turn the mode on) and **Stop trying** (back to what ran before). While trying, the banner, the **Overview** and the QoS-Ex box on LuCI's **Status → Overview** read **Trying**, and the **Servers** list and the **Map** mark those servers **would block**.
+
+## Ping Filter 2.1.0.8
+
+- Added: `pingfilter try <casual|competitive|ping|distance>` grades with that mode but blocks nothing: only the **Always block** list still blocks; the mode's blocks, a country list and the Ping Catch /24s stay out of the firewall, new servers are not held and no connection is cut. `pingfilter try now` blocks with the mode tried; `pingfilter try stop` puts back the mode, limit and base ping that ran before. Picking a mode (`profile`, `mode`) ends a try; a new limit, radius or Ping Catch keeps it. `pingfilter status` and the servers list say so (`trying=1`; servers it would block read `would`).
 
 ## LuCI app 1.4.1.4
 
