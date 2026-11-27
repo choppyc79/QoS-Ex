@@ -15,6 +15,7 @@ var CHIPS = [
 	[ '',          _('All') ],
 	[ 'allowed',   _('Allowed') ],
 	[ 'blocked',   _('Blocked') ],
+	[ 'would',     _('Would block') ],
 	[ 'whitelist', _('Always allowed') ],
 	[ 'blacklist', _('Always blocked') ],
 	[ 'cached',    _('Cached') ]
@@ -195,7 +196,8 @@ return view.extend({
 			return !st || r.state === st;
 		});
 
-		h.morphKids(refs.chips, CHIPS.map(function(c) {
+		// Would block: only while a mode is tried (or picked).
+		h.morphKids(refs.chips, CHIPS.filter(function(c) { return c[0] !== 'would' || (cnt.would | 0) > 0 || st === 'would'; }).map(function(c) {
 			var n = c[0] ? (cnt[c[0]] | 0) : all.length;
 			return E('span', { 'class': 'qos-ex-chip qos-ex-chip-btn' + (st === c[0] ? ' on' : (st ? ' dim' : '')),
 				'data-st': c[0] }, [ c[1] + ' ', E('b', {}, String(n)) ]);
