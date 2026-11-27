@@ -289,8 +289,8 @@ The other cards are always there:
   0 it reads **Ping Filter only · both rates 0** and **nothing shaped**, and
   **Shape the line…** opens Auto Setup again.
 - **Ping Filter** — the switch, the mode in words (`Ping ≤ 40 ms`,
-  `Distance ≤ 1000 km · Ping Catch ≤ 40 ms`, `Watch only`), and what it is
-  doing:
+  `Distance ≤ 1000 km · Ping Catch ≤ 40 ms`, `Watch only`; `Trying: Ping ≤
+  60 ms` while a mode is tried), and what it is doing:
   - **In match**: you are playing.
   - **Matchmaking**: a gaming device is looking for a game (UDP to game
     ports, never a download or a web page).
@@ -351,7 +351,8 @@ The Ping Filter's main page. Along the top:
   allow and Always block lists.
 
 The figure tiles (**Mode**, **Servers**, **Always allow / block**,
-**Watched devices**, **Allowed / blocked**) each link to where that is set.
+**Watched devices**, **Allowed / blocked**, or **Allowed / would block**
+while a mode is tried) each link to where that is set.
 
 **Mode cards.** Click one to switch mode. Each mode keeps its own number. The
 line above the cards says what is running; the card in use shows only its
@@ -369,6 +370,15 @@ controls, the others what a click gives you.
   outside the radius whose ping is at or under it.
 - **Watch only** — find and grade servers. Only the Always block list and a
   country list block anything.
+
+**Try first**, on the Ping and Distance cards, grades servers as that mode
+but blocks nothing: only the Always block list still blocks. The card then
+reads **Trying: nothing is blocked**, with how many servers the mode would
+block and the ones your devices are talking to now (**In use now**); the
+line above the cards starts **Trying**. **Block now** turns the mode on,
+**Stop trying** goes back to what ran before. While trying, Casual,
+Competitive and the numbers are tried too; clicking another card picks it
+for real.
 
 Mode changes apply at once, even to the server you are playing on. While a
 match is on, the Dashboard warns: **A game is on: this may block the server
@@ -465,7 +475,8 @@ and Always block entry, including one not seen yet. With `max_servers` set
 above 800, the table shows the first 800 and the servers in use.
 
 - The chips show only allowed, blocked, always allowed, always blocked or
-  cached (known from earlier) servers.
+  cached (known from earlier) servers, and while a mode is tried the ones it
+  would block.
 - The list starts nearest first: by distance from your home location,
   then by ping, with servers not located yet last. **Sort** changes that,
   and the search box finds an address, country, city or owner.
@@ -476,7 +487,8 @@ On each row:
 
 - Its state. **held**: with Ping Catch, a server outside your radius with no
   ping of its own yet, kept out of the game until its own ping is graded.
-  **catch**: one Ping Catch let in on its own ping.
+  **catch**: one Ping Catch let in on its own ping. **would block**: one
+  the mode being tried would block (nothing is blocked while trying).
 - **Allow** or **Block** pins the server either way. Press the lit one again
   to unpin it, so it is judged by ping or distance again.
 - **×** forgets the server: everything except its location.
