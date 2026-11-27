@@ -282,7 +282,7 @@ return view.extend({
 		// able to hide the transient states (and see nothing but your own
 		// pins) is what keeps a busy map readable.
 		view.filters = { allowed: true, blocked: true, cached: true,
-			whitelist: true, blacklist: true };
+			whitelist: true, blacklist: true, would: true };
 		var legendChips = {};
 		var mkChip = function(state, label, dotClass, ringColor) {
 			var count = E('span', { 'class': 'pf-legend-count' }, '0');
@@ -310,6 +310,7 @@ return view.extend({
 		var legend = E('div', { 'class': 'pf-legend' }, [
 			mkChip('allowed',   _('allowed'),   ''),
 			mkChip('blocked',   _('blocked'),   ''),
+			mkChip('would',     _('would block'), ''),
 			mkChip('whitelist', _('always allowed'), 'ring', ringFor('wl')),
 			mkChip('blacklist', _('always blocked'), 'ring', ringFor('bl')),
 			mkChip('cached',    _('cached'),    ''),
@@ -1369,7 +1370,7 @@ return view.extend({
 		var view = this;
 		if (!view.legendChips) return;
 		var shown = h.pfVisible(view.data, view.playStart);
-		var lc = { allowed: 0, blocked: 0, cached: 0, whitelist: 0, blacklist: 0 };
+		var lc = { allowed: 0, blocked: 0, cached: 0, whitelist: 0, blacklist: 0, would: 0 };
 		for (var n = 0; n < shown.length; n++) {
 			var st = shown[n].state;
 			if (lc[st] !== undefined) lc[st]++;
@@ -1379,6 +1380,8 @@ return view.extend({
 			if (view.legendChips[ck])
 				view.legendChips[ck].count.textContent = String(lc[ck]);
 		}
+		// Would block: only while a mode is tried.
+		if (view.legendChips.would) view.legendChips.would.chip.hidden = !lc.would;
 	},
 
 	refetch: function() {
